@@ -78,11 +78,16 @@ type SMFContext struct {
 	StaticIpInfo             []factory.StaticIpInfo
 	CPNodeID                 NodeID
 	PFCPPort                 int
+	N4Addrs                  N4Addrs // the SMF's own N4 addresses; see PFCPListenAddr, FSEIDAddrs
 	UDMProfile               models.NFProfileDiscovery
 	NrfCacheEvictionInterval time.Duration
 	SBIPort                  int
 	LocalSEIDCount           uint64
 	EnableNrfCaching         bool
+
+	// UPFTransportFamily is the upfTransportFamily configuration: the N3/N9 family of each
+	// UPF that has an override, by UPF hostname.
+	UPFTransportFamily map[string]AddressFamily
 
 	// For ULCL
 	ULCLSupport bool
@@ -253,7 +258,7 @@ func InitSmfContext(config *factory.Config) *SMFContext {
 	}
 
 	if pfcp := configuration.PFCP; pfcp != nil {
-		addr, err := resolvePfcpAddr(pfcp)
+		local, err := resolvePfcpLocal(pfcp)
 		if err != nil {
 			logger.CtxLog.Errorf("PFCP Parse Addr Fail: %v", err)
 			return nil
@@ -261,9 +266,19 @@ func InitSmfContext(config *factory.Config) *SMFContext {
 
 		smfContext.PFCPPort = int(pfcp.Port)
 
-		smfContext.CPNodeID.NodeIdType = 0
-		smfContext.CPNodeID.NodeIdValue = addr.IP.To4()
+		smfContext.CPNodeID = local.nodeID
+		smfContext.N4Addrs = local.addrs
+		SetN4PreferredFamily(local.resolveFamily)
+		logger.CtxLog.Infof("PFCP Node ID [%s], N4 addresses IPv4 [%v] IPv6 [%v], UPF names resolve %s first",
+			smfContext.CPNodeID.ValueString(), local.addrs.IPv4, local.addrs.IPv6, N4PreferredFamily())
 	}
+
+	families, err := parseUpfTransportFamily(configuration.UpfTransportFamily)
+	if err != nil {
+		logger.CtxLog.Errorf("upfTransportFamily: %v", err)
+		return nil
+	}
+	smfContext.UPFTransportFamily = families
 
 	// Set client and set url
 	ManagementConfig := Nnrf_NFManagement.NewConfiguration()

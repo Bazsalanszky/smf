@@ -285,18 +285,42 @@ func farToUpdateFAR(far *context.FAR) *ie.IE {
 	return ie.NewUpdateFAR(updateFARies...)
 }
 
+// NewCPFSEID builds the SMF's F-SEID IE. Each address goes in the slot of its own family
+// (TS 29.244 clause 8.2.37: V4 and V6 may both be set); a nil address is skipped, and only
+// the first address of each family is used. The address used to go in the IPv4 slot
+// whatever its family, so an IPv6 SMF sent an F-SEID of 0.0.0.0.
+func NewCPFSEID(seid uint64, addrs ...net.IP) *ie.IE {
+	var v4, v6 net.IP
+	for _, addr := range addrs {
+		switch {
+		case addr == nil:
+		case addr.To4() != nil:
+			if v4 == nil {
+				v4 = addr
+			}
+		case v6 == nil:
+			v6 = addr
+		}
+	}
+	return ie.NewFSEID(seid, v4, v6)
+}
+
+// BuildPfcpSessionEstablishmentRequest builds the request. fseidAddr and moreFSEIDAddrs are
+// the SMF's N4 addresses for the CP F-SEID, placed by family (see NewCPFSEID): one address
+// for a single-stack SMF, one per family for a dual-stack one.
 func BuildPfcpSessionEstablishmentRequest(
 	sequenceNumber uint32,
 	nodeID string,
-	fseidIpv4Address net.IP,
+	fseidAddr net.IP,
 	localSeid uint64,
 	pdrList []*context.PDR,
 	farList []*context.FAR,
 	qerList []*context.QER,
+	moreFSEIDAddrs ...net.IP,
 ) (*message.SessionEstablishmentRequest, error) {
 	ies := make([]*ie.IE, 0)
 	ies = append(ies, ie.NewNodeIDHeuristic(nodeID))
-	ies = append(ies, ie.NewFSEID(localSeid, fseidIpv4Address, nil))
+	ies = append(ies, NewCPFSEID(localSeid, append([]net.IP{fseidAddr}, moreFSEIDAddrs...)...))
 
 	for _, pdr := range pdrList {
 		if pdr.State == context.RULE_INITIAL {
@@ -340,20 +364,24 @@ func BuildPfcpSessionEstablishmentRequest(
 }
 
 // TODO: Replace dummy value in PFCP message
+//
+// BuildPfcpSessionModificationRequest builds the request; fseidAddr and moreFSEIDAddrs are as
+// for BuildPfcpSessionEstablishmentRequest.
 func BuildPfcpSessionModificationRequest(
 	sequenceNumber uint32,
 	localSEID uint64,
 	remoteSEID uint64,
-	fseidIPv4Address net.IP,
+	fseidAddr net.IP,
 	pdrList []*context.PDR,
 	farList []*context.FAR,
 	qerList []*context.QER,
 	removePDR []*context.PDR,
 	removeFAR []*context.FAR,
 	removeQER []*context.QER,
+	moreFSEIDAddrs ...net.IP,
 ) (*message.SessionModificationRequest, error) {
 	ies := make([]*ie.IE, 0)
-	ies = append(ies, ie.NewFSEID(localSEID, fseidIPv4Address, nil))
+	ies = append(ies, NewCPFSEID(localSEID, append([]net.IP{fseidAddr}, moreFSEIDAddrs...)...))
 
 	for _, pdr := range pdrList {
 		switch pdr.State {
@@ -414,11 +442,14 @@ func BuildPfcpSessionModificationRequest(
 	), nil
 }
 
+// BuildPfcpSessionDeletionRequest builds the request; fseidAddr and moreFSEIDAddrs are as for
+// BuildPfcpSessionEstablishmentRequest.
 func BuildPfcpSessionDeletionRequest(
 	sequenceNumber uint32,
 	localSEID uint64,
 	remoteSEID uint64,
-	fseidIPv4Address net.IP,
+	fseidAddr net.IP,
+	moreFSEIDAddrs ...net.IP,
 ) *message.SessionDeletionRequest {
 	return message.NewSessionDeletionRequest(
 		1,
@@ -426,7 +457,7 @@ func BuildPfcpSessionDeletionRequest(
 		remoteSEID,
 		sequenceNumber,
 		12,
-		ie.NewFSEID(localSEID, fseidIPv4Address, nil),
+		NewCPFSEID(localSEID, append([]net.IP{fseidAddr}, moreFSEIDAddrs...)...),
 	)
 }
 

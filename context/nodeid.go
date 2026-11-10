@@ -5,7 +5,6 @@ package context
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -64,30 +63,83 @@ func (n *NodeID) Equal(other NodeID) bool {
 	return bytes.Equal(n.NodeIdValue, other.NodeIdValue)
 }
 
+// ResolveNodeIdToIp returns the address of the node: the value itself for an IP Node ID,
+// and the cached or freshly resolved address for an FQDN (see ResolveIP). It returns nil
+// when the name does not resolve; it used to return 0.0.0.0, which callers could not tell
+// apart from a real address and which compared equal for any two unresolvable nodes.
 func (n *NodeID) ResolveNodeIdToIp() net.IP {
+	ip, err := n.ResolveIP()
+	if err != nil {
+		return nil
+	}
+	return ip
+}
+
+// ResolveIP is ResolveNodeIdToIp with the failure reported. An FQDN is looked up in the
+// SMF DNS cache first; on a miss it is resolved and the cache updated. When the name has
+// addresses of both families, the one returned is chosen by N4PreferredFamily (see
+// selectAddress), so the choice no longer depends on the order the resolver happens to
+// return them in.
+func (n *NodeID) ResolveIP() (net.IP, error) {
 	switch n.NodeIdType {
 	case NodeIdTypeIpv4Address, NodeIdTypeIpv6Address:
-		return n.NodeIdValue
+		return n.NodeIdValue, nil
 	case NodeIdTypeFqdn:
-		if ip, err := getDnsHostIp(string(n.NodeIdValue)); err != nil {
-			logger.CtxLog.Warnf("host [%v] not found in smf dns cache", string(n.NodeIdValue))
-			resolver := net.Resolver{}
-			ns, err := resolver.LookupHost(context.Background(), string(n.NodeIdValue))
-			if err != nil {
-				logger.CtxLog.Warnf("host lookup failed: %+v", err)
-				return net.IPv4zero
-			} else {
-				logger.CtxLog.Infof("host [%v] dns resolved, updating smf dns cache", string(n.NodeIdValue))
-				InsertDnsHostIp(string(n.NodeIdValue), net.ParseIP(ns[0]))
-				return net.ParseIP(ns[0])
-			}
-		} else {
-			logger.CtxLog.Debugf("host [%v] found in smf dns cache", string(n.NodeIdValue))
-			return ip
+		host := string(n.NodeIdValue)
+		if ip, err := getDnsHostIp(host); err == nil {
+			logger.CtxLog.Debugf("host [%v] found in smf dns cache", host)
+			return ip, nil
 		}
+		logger.CtxLog.Warnf("host [%v] not found in smf dns cache", host)
+		ip, err := lookupNodeAddress(host)
+		if err != nil {
+			logger.CtxLog.Warnf("host lookup failed: %+v", err)
+			return nil, err
+		}
+		logger.CtxLog.Infof("host [%v] dns resolved, updating smf dns cache", host)
+		InsertDnsHostIp(host, ip)
+		return ip, nil
 	default:
-		return net.IPv4zero
+		return nil, fmt.Errorf("unknown node id type %d", n.NodeIdType)
 	}
+}
+
+// ValueString returns the Node ID in the text form ie.NewNodeIDHeuristic maps back to the
+// same Node ID type: the address for an IPv4 or IPv6 Node ID, the name for an FQDN. Unlike
+// ResolveNodeIdToIp().String() it never resolves, so an FQDN stays an FQDN on the wire.
+func (n *NodeID) ValueString() string {
+	switch n.NodeIdType {
+	case NodeIdTypeIpv4Address, NodeIdTypeIpv6Address:
+		// An unset value prints "<nil>", as ResolveNodeIdToIp().String() did, so an SMF
+		// whose Node ID was never set still sends a (meaningless) Node ID IE rather than none.
+		return net.IP(n.NodeIdValue).String()
+	default:
+		return string(n.NodeIdValue)
+	}
+}
+
+// sameNode reports whether a and b identify the same node. Two Node IDs of one type are
+// compared by value (IP addresses with net.IP.Equal, so a 4-byte and a 16-byte form of one
+// IPv4 address are the same node). An FQDN and an IP Node ID are compared by the address
+// the FQDN resolves to, and only when both sides have one: an unresolvable name is not
+// equal to anything. An IPv4 and an IPv6 Node ID are never the same node.
+//
+// It replaces a reflect.DeepEqual of the two addresses' To4() forms, which is nil for any
+// IPv6 address, so every IPv6 node compared equal to every other one.
+func sameNode(a, b NodeID) bool {
+	if a.NodeIdType == b.NodeIdType {
+		if a.NodeIdType == NodeIdTypeFqdn {
+			return bytes.Equal(a.NodeIdValue, b.NodeIdValue)
+		}
+		return net.IP(a.NodeIdValue).Equal(net.IP(b.NodeIdValue))
+	}
+	if a.NodeIdType != NodeIdTypeFqdn && b.NodeIdType != NodeIdTypeFqdn {
+		return false
+	}
+	aIP := a.ResolveNodeIdToIp()
+	bIP := b.ResolveNodeIdToIp()
+	logger.CtxLog.Debugf("compare node ids by address: [%v] vs [%v]", aIP, bIP)
+	return aIP != nil && bIP != nil && aIP.Equal(bIP)
 }
 
 // ResolveNodeIdToIpCached returns the currently known IP for the NodeID without ever
@@ -141,8 +193,7 @@ func RefreshDnsHostIpCache() {
 
 	for hostName, observedGen := range observed {
 		logger.CtxLog.Debugf("refreshing DNS for host [%v]", hostName)
-		resolver := net.Resolver{}
-		ns, err := resolver.LookupHost(context.Background(), hostName)
+		newIP, err := lookupNodeAddress(hostName)
 		if err != nil {
 			logger.CtxLog.Warnf("host lookup failed: %+v", err)
 			dnsHostIpCacheMu.Lock()
@@ -158,7 +209,6 @@ func RefreshDnsHostIpCache() {
 			dnsHostIpCacheMu.Unlock()
 			continue
 		}
-		newIP := net.ParseIP(ns[0])
 		dnsHostIpCacheMu.Lock()
 		if dnsHostIpGen[hostName] == observedGen {
 			if !dnsHostIpCache[hostName].Equal(newIP) {

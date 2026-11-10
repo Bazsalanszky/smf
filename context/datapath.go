@@ -8,6 +8,7 @@ package context
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -712,6 +713,7 @@ func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER,
 		// followed map order, and uplink the told rule did not match was dropped. V4 because
 		// clause 8.2.3 requires V4 or V6 even with CHOOSE, and the SMF builds IPv4-only sessions:
 		// the PDN type is IPv4 and the F-TEID the UPF assigns is read back as IPv4.
+		// TODO(ipv6-p2): set V4 and/or V6 from the UPF's transport family (dual F-TEID).
 		ULPDR.PDI.LocalFTeid = &FTEID{
 			V4:       true,
 			Ch:       true,
@@ -748,7 +750,7 @@ func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER,
 			nextULTunnel := nextULDest.UpLinkTunnel
 			iface := nextULTunnel.DestEndPoint.UPF.GetInterface(models.UPINTERFACETYPE_N9, smContext.Dnn)
 
-			if upIP, err := iface.IP(smContext.SelectedPDUSessionType); err != nil {
+			if upIP, err := n9PeerIPv4(iface, nextULTunnel.DestEndPoint.UPF); err != nil {
 				logger.CtxLog.Errorf("activate UpLink PDR[%v] failed %v", name, err)
 				return err
 			} else {
@@ -810,7 +812,7 @@ func (dpNode *DataPathNode) ActivateDlLinkPdr(smContext *SMContext, defQER *QER,
 
 			iface = nextDLDest.UPF.GetInterface(models.UPINTERFACETYPE_N9, smContext.Dnn)
 
-			if upIP, err := iface.IP(smContext.SelectedPDUSessionType); err != nil {
+			if upIP, err := n9PeerIPv4(iface, nextDLDest.UPF); err != nil {
 				logger.CtxLog.Errorf("activate Downlink PDR[%v] failed %v", name, err)
 				return err
 			} else {
@@ -971,4 +973,24 @@ func BuildGBR(qosData *models.QosData) *GBR {
 		gbr.DLGBR = util.BitRateTokbps(util.NormalizeBitRate(gbrdl))
 	}
 	return gbr
+}
+
+// n9PeerIPv4 returns the N9 address of a neighbouring UPF for an outer header creation.
+// The address is chosen by the UPF's transport family, not by the session's PDU type.
+//
+// TODO(ipv6-p2): the outer header creation built from it is GTP-U/UDP/IPv4 only
+// (OuterHeaderCreationGtpUUdpIpv4 with Ipv4Address), so an IPv6 N9 address is refused
+// here rather than sent as 0.0.0.0. Phase 2 picks the description from the peer's family.
+func n9PeerIPv4(iface *UPFInterfaceInfo, upf *UPF) (net.IP, error) {
+	if iface == nil {
+		return nil, fmt.Errorf("no N9 interface")
+	}
+	ip, err := iface.TransportIP(upf.GetTransportFamily())
+	if err != nil {
+		return nil, err
+	}
+	if ip.To4() == nil {
+		return nil, fmt.Errorf("N9 address %s is IPv6, and IPv6 GTP-U outer headers are not supported yet", ip)
+	}
+	return ip, nil
 }

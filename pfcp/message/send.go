@@ -190,17 +190,18 @@ func SendPfcpAssociationSetupRequest(upNodeID smf_context.NodeID, upfPort uint16
 		}
 	}
 
-	if net.IP.Equal(upNodeID.ResolveNodeIdToIp(), net.IPv4zero) {
-		return fmt.Errorf("PFCP Association Setup Request failed, invalid NodeId: %v", string(upNodeID.NodeIdValue))
+	upIP, err := upNodeID.ResolveIP()
+	if err != nil {
+		return fmt.Errorf("PFCP Association Setup Request failed, invalid NodeId: %v: %w", upNodeID.ValueString(), err)
 	}
 
-	pfcpMsg := BuildPfcpAssociationSetupRequest(getSeqNumber(), udp.GetServerStartTime(), smf_context.SMF_Self().CPNodeID.ResolveNodeIdToIp().String(),
+	pfcpMsg := BuildPfcpAssociationSetupRequest(getSeqNumber(), udp.GetServerStartTime(), smf_context.SMF_Self().CPNodeID.ValueString(),
 		factory.SmfConfig.Configuration.EnableDbStore)
 	addr := &net.UDPAddr{
-		IP:   upNodeID.ResolveNodeIdToIp(),
+		IP:   upIP,
 		Port: int(upfPort),
 	}
-	logger.PfcpLog.Infof("sent PFCP Association Request to NodeID[%s]", upNodeID.ResolveNodeIdToIp().String())
+	logger.PfcpLog.Infof("sent PFCP Association Request to NodeID[%s]", upIP.String())
 
 	if factory.SmfConfig.Configuration.EnableUpfAdapter {
 		if rsp, err := SendPfcpMsgToAdapter(upNodeID, pfcpMsg, addr, nil, UPFAdapterURL); err != nil {
@@ -251,7 +252,7 @@ func SendPfcpAssociationSetupRequest(upNodeID smf_context.NodeID, upfPort uint16
 }
 
 func SendPfcpAssociationSetupResponse(upNodeID smf_context.NodeID, cause uint8, upfPort uint16) error {
-	pfcpMsg := BuildPfcpAssociationSetupResponse(cause, udp.GetServerStartTime(), smf_context.SMF_Self().CPNodeID.ResolveNodeIdToIp().String())
+	pfcpMsg := BuildPfcpAssociationSetupResponse(cause, udp.GetServerStartTime(), smf_context.SMF_Self().CPNodeID.ValueString())
 	addr := &net.UDPAddr{
 		IP:   upNodeID.ResolveNodeIdToIp(),
 		Port: int(upfPort),
@@ -267,7 +268,7 @@ func SendPfcpAssociationSetupResponse(upNodeID smf_context.NodeID, cause uint8, 
 }
 
 func SendPfcpAssociationReleaseResponse(upNodeID smf_context.NodeID, cause uint8, upfPort uint16) error {
-	pfcpMsg := BuildPfcpAssociationReleaseResponse(cause, smf_context.SMF_Self().CPNodeID.ResolveNodeIdToIp().String())
+	pfcpMsg := BuildPfcpAssociationReleaseResponse(cause, smf_context.SMF_Self().CPNodeID.ValueString())
 	addr := &net.UDPAddr{
 		IP:   upNodeID.ResolveNodeIdToIp(),
 		Port: int(upfPort),
@@ -334,16 +335,17 @@ func SendPfcpSessionEstablishmentRequest(
 	localSEID = pfcpContext.LocalSEID
 	haveLocalSEID = true
 
-	nodeIDIPAddress := smf_context.SMF_Self().CPNodeID.ResolveNodeIdToIp()
+	fseidV4, fseidV6 := smf_context.SMF_Self().FSEIDAddrs()
 
 	pfcpMsg, err := BuildPfcpSessionEstablishmentRequest(
 		getSeqNumber(),
-		nodeIDIPAddress.String(),
-		nodeIDIPAddress,
+		smf_context.SMF_Self().CPNodeID.ValueString(),
+		fseidV4,
 		pfcpContext.LocalSEID,
 		pdrList,
 		farList,
 		qerList,
+		fseidV6,
 	)
 	if err != nil {
 		return err
@@ -515,7 +517,8 @@ func sendPfcpSessionModificationRequest(
 	// and the next modification -- which sends only rules not yet applied -- skipped them for good.
 	restoreRuleStates := snapshotRuleStates(pdrList, farList, qerList)
 
-	pfcpMsg, err := BuildPfcpSessionModificationRequest(seqNum, pfcpContext.LocalSEID, pfcpContext.RemoteSEID, smf_context.SMF_Self().CPNodeID.ResolveNodeIdToIp(), pdrList, farList, qerList, removePDR, removeFAR, removeQER)
+	fseidV4, fseidV6 := smf_context.SMF_Self().FSEIDAddrs()
+	pfcpMsg, err := BuildPfcpSessionModificationRequest(seqNum, pfcpContext.LocalSEID, pfcpContext.RemoteSEID, fseidV4, pdrList, farList, qerList, removePDR, removeFAR, removeQER, fseidV6)
 	if err != nil {
 		restoreRuleStates()
 
@@ -647,7 +650,8 @@ func SendPfcpSessionDeletionRequest(upNodeID smf_context.NodeID, ctx *smf_contex
 		return fmt.Errorf("PFCP Context not found for NodeID[%s]", upNodeIDStr)
 	}
 	pfcpContext := ctx.PFCPContext[pfcpKey]
-	pfcpMsg := BuildPfcpSessionDeletionRequest(seqNum, pfcpContext.LocalSEID, pfcpContext.RemoteSEID, smf_context.SMF_Self().CPNodeID.ResolveNodeIdToIp())
+	fseidV4, fseidV6 := smf_context.SMF_Self().FSEIDAddrs()
+	pfcpMsg := BuildPfcpSessionDeletionRequest(seqNum, pfcpContext.LocalSEID, pfcpContext.RemoteSEID, fseidV4, fseidV6)
 
 	upaddr := &net.UDPAddr{
 		IP:   upNodeID.ResolveNodeIdToIp(),
@@ -1157,26 +1161,50 @@ type UdpPodPfcpMsg struct {
 	UpNodeID smf_context.NodeID `json:"upNodeID"`
 }
 
+// GetLocalIP returns the first non-loopback IPv4 interface address, or, on a host with none,
+// the first global unicast IPv6 one. It used to return "" on an IPv6-only host, so the UPF
+// adapter never learnt where to relay UPF-originated messages.
 func GetLocalIP() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return ""
 	}
+	return firstLocalIP(addrs)
+}
+
+func firstLocalIP(addrs []net.Addr) string {
+	var v6 net.IP
 	for _, address := range addrs {
 		// check the address type and if it is not a loopback the display it
 		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 			if ipnet.IP.To4() != nil {
 				return ipnet.IP.String()
 			}
+			if v6 == nil && ipnet.IP.IsGlobalUnicast() {
+				v6 = ipnet.IP
+			}
 		}
 	}
+	if v6 != nil {
+		return v6.String()
+	}
 	return ""
+}
+
+// adapterSmfIP is the address the SMF gives the UPF adapter to relay UPF-originated messages
+// (session reports) to. That address has to reach the PFCP socket, so it is the SMF's N4
+// address when there is a single, specific one; otherwise an interface address, as before.
+func adapterSmfIP() string {
+	if ip := smf_context.SMF_Self().AdapterRelayIP(); ip != nil {
+		return ip.String()
+	}
+	return GetLocalIP()
 }
 
 // SendPfcpMsgToAdapter send pfcp msg to upf-adapter in http/json encoded format
 func SendPfcpMsgToAdapter(upNodeID smf_context.NodeID, msg message.Message, addr *net.UDPAddr, eventData any, url string) (*http.Response, error) {
 	// get IP
-	ip_str := GetLocalIP()
+	ip_str := adapterSmfIP()
 
 	buf := make([]byte, msg.MarshalLen())
 	err := msg.MarshalTo(buf)
