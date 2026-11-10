@@ -39,6 +39,7 @@ import (
 	"github.com/omec-project/smf/pfcp/udp"
 	"github.com/omec-project/smf/pfcp/upf"
 	"github.com/omec-project/smf/polling"
+	"github.com/omec-project/smf/util"
 	"github.com/omec-project/util/http2_util"
 	utilLogger "github.com/omec-project/util/logger"
 	"github.com/urfave/cli/v3"
@@ -295,7 +296,7 @@ func (smf *SMF) Start() {
 	udp.Run(pfcp.Dispatch)
 	time.Sleep(1000 * time.Millisecond)
 
-	HTTPAddr := fmt.Sprintf("%s:%d", smfSelf.BindingIPv4, smfSelf.SBIPort)
+	HTTPAddr := util.HostPort(smfSelf.BindingIPv4, smfSelf.SBIPort)
 	// TLS key logging is a debugging aid: off unless the operator sets SSLKEYLOGFILE.
 	sslLog := os.Getenv("SSLKEYLOGFILE")
 	server, err := http2_util.NewServer(HTTPAddr, sslLog, router)
