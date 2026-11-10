@@ -103,12 +103,22 @@ type StaticIpInfo struct {
 }
 
 type Sbi struct {
-	Scheme       string `yaml:"scheme"`
-	TLS          *TLS   `yaml:"tls"`
-	RegisterIPv4 string `yaml:"registerIPv4,omitempty"` // IP that is registered at NRF.
-	// IPv6Addr string `yaml:"ipv6Addr,omitempty"`
-	BindingIPv4 string `yaml:"bindingIPv4,omitempty"` // IP used to run the server in the node.
-	Port        int    `yaml:"port,omitempty"`
+	Scheme string `yaml:"scheme"`
+	TLS    *TLS   `yaml:"tls"`
+	// RegisterIPv4 is the address registered at the NRF and used in the SMF's own URIs: an
+	// IPv4 address, a host name, or the name of an environment variable holding one or a
+	// comma-separated list (POD_IP, POD_IPS). An IPv6 value is registered as IPv6.
+	RegisterIPv4 string `yaml:"registerIPv4,omitempty"`
+	// RegisterIPv6 is the IPv6 address registered next to RegisterIPv4, in the same forms.
+	RegisterIPv6 string `yaml:"registerIPv6,omitempty"`
+	// BindingAddr is the SBI listen address, of either family; it wins over BindingIPv4.
+	BindingAddr string `yaml:"bindingAddr,omitempty"`
+	// BindingIPv4 is the legacy name of BindingAddr.
+	BindingIPv4 string `yaml:"bindingIPv4,omitempty"`
+	// PreferredFamily ("IPv4", the default, or "IPv6") picks the address of the SMF's own
+	// URIs and of a peer's URI when both families are available and there is no host name.
+	PreferredFamily string `yaml:"preferredFamily,omitempty"`
+	Port            int    `yaml:"port,omitempty"`
 }
 
 type TLS struct {

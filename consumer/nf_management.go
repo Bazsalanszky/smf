@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -23,19 +22,19 @@ import (
 	"github.com/omec-project/openapi/v2/models"
 	"github.com/omec-project/openapi/v2/nfConfigApi"
 	nrfCache "github.com/omec-project/openapi/v2/nrfcache"
+	openapiutils "github.com/omec-project/openapi/v2/utils"
 	smfContext "github.com/omec-project/smf/context"
 	"github.com/omec-project/smf/factory"
 	"github.com/omec-project/smf/logger"
 	"github.com/omec-project/smf/metrics"
 	"github.com/omec-project/smf/msgtypes/svcmsgtypes"
 	"github.com/omec-project/smf/util"
+	"github.com/omec-project/util/sbiaddr"
 )
 
 var newNrfNFManagementHTTPClient = func() *http.Client {
 	return nil
 }
-
-const podIPPlaceholder = "POD_IP"
 
 // n1n2TransferTimeout is the HTTP timeout for a single N1N2MessageTransfer attempt.
 // Kept short so that retries with AMF re-discovery can happen within the UE's T3580 window.
@@ -45,30 +44,44 @@ func normalizeAdvertisedSmfHost(nfProfile *models.NFProfile) {
 	if nfProfile == nil {
 		return
 	}
-	advertisedHost := ""
-	if factory.SmfConfig.Configuration != nil && factory.SmfConfig.Configuration.Sbi != nil {
-		configuredRegisterIPv4 := factory.SmfConfig.Configuration.Sbi.RegisterIPv4
-		if configuredRegisterIPv4 != "" && configuredRegisterIPv4 != podIPPlaceholder && net.ParseIP(configuredRegisterIPv4) == nil {
-			advertisedHost = configuredRegisterIPv4
-		} else if configuredRegisterIPv4 == podIPPlaceholder && factory.SmfConfig.Configuration.SmfName != "" {
-			advertisedHost = strings.ToLower(factory.SmfConfig.Configuration.SmfName)
-		}
-	}
+	smfSelf := smfContext.SMF_Self()
+	advertisedHost := advertisedSbiAddrs(smfSelf).FQDN
 	if advertisedHost == "" {
 		return
 	}
-	sbiPort := smfContext.SMF_Self().SBIPort
+	sbiPort := smfSelf.SBIPort
 	services := util.NFProfileServices(nfProfile)
 	for key, svc := range services {
-		svc.SetApiPrefix(fmt.Sprintf("%s://%s:%d", svc.GetScheme(), advertisedHost, sbiPort))
+		apiPrefix := sbiaddr.URI(string(svc.GetScheme()), advertisedHost, sbiPort)
+		svc.SetApiPrefix(apiPrefix)
 		versions := svc.GetVersions()
 		for versionIndex := range versions {
-			versions[versionIndex].SetApiFullVersion(fmt.Sprintf("%s://%s:%d/%s/v1", svc.GetScheme(), advertisedHost, sbiPort, svc.GetServiceName()))
+			versions[versionIndex].SetApiFullVersion(fmt.Sprintf("%s/%s/v1", apiPrefix, svc.GetServiceName()))
 		}
 		svc.SetVersions(versions)
 		services[key] = svc
 	}
 	util.SetNFProfileServices(nfProfile, services)
+}
+
+// advertisedSbiAddrs returns the addresses the SMF advertises in its NF profile. They are
+// its register addresses (SMFContext.SbiAddrs), except that with registerIPv4: POD_IP and
+// smfName set, the profile carries the lower-cased smfName as its host name instead of the
+// pod's IPv4 address, as before. The SMF's callback URIs keep using the pod address
+// (SMFContext.GetSbiUri).
+func advertisedSbiAddrs(smfCtx *smfContext.SMFContext) sbiaddr.RegisterAddrs {
+	addrs := smfCtx.SbiAddrs()
+	cfg := factory.SmfConfig.Configuration
+	if cfg == nil || cfg.Sbi == nil || cfg.Sbi.RegisterIPv4 != sbiaddr.EnvPodIP || cfg.SmfName == "" {
+		return addrs
+	}
+	kind, name := sbiaddr.Classify(strings.ToLower(cfg.SmfName))
+	if kind != sbiaddr.FQDN {
+		logger.ConsumerLog.Warnf("smfName %q is not a host name; registering the pod address instead", cfg.SmfName)
+		return addrs
+	}
+	addrs.FQDN, addrs.IPv4 = name, ""
+	return addrs
 }
 
 func newNrfNFManagementClient(nrfURI string) *Nnrf_NFManagement.APIClient {
@@ -109,21 +122,20 @@ func getNfProfile(smfCtx *smfContext.SMFContext, sessionCfgs []nfConfigApi.Sessi
 	if factory.SmfConfig.Configuration != nil && len(factory.SmfConfig.Configuration.ServiceNameList) > 0 {
 		serviceNames = factory.SmfConfig.Configuration.ServiceNameList
 	}
-	advertisedRegisterIPv4 := smfCtx.RegisterIPv4
-	if factory.SmfConfig.Configuration != nil && factory.SmfConfig.Configuration.Sbi != nil {
-		configuredRegisterIPv4 := factory.SmfConfig.Configuration.Sbi.RegisterIPv4
-		if configuredRegisterIPv4 != "" && configuredRegisterIPv4 != podIPPlaceholder && net.ParseIP(configuredRegisterIPv4) == nil {
-			advertisedRegisterIPv4 = configuredRegisterIPv4
-		} else if configuredRegisterIPv4 == podIPPlaceholder && factory.SmfConfig.Configuration.SmfName != "" {
-			advertisedRegisterIPv4 = strings.ToLower(factory.SmfConfig.Configuration.SmfName)
-		}
+	addrs := advertisedSbiAddrs(smfCtx)
+	if addrs.Empty() {
+		return profile, openapi.ReportError("SMF register address is empty")
 	}
 	nfServiceList := make(map[string]models.NFService, len(serviceNames))
-	apiPrefix := fmt.Sprintf("%s://%s:%d", smfCtx.URIScheme, advertisedRegisterIPv4, smfCtx.SBIPort)
+	apiPrefix := addrs.URI(string(smfCtx.URIScheme), smfCtx.SBIPort, smfCtx.SbiPreference)
 	var svc models.NFService
 	svc.SetScheme(smfCtx.URIScheme)
 	svc.SetNfServiceStatus(models.NFSERVICESTATUS_REGISTERED)
 	svc.SetApiPrefix(apiPrefix)
+	svc.SetIpEndPoints(openapiutils.NewIpEndPoints(addrs.IPv4, addrs.IPv6, int32(smfCtx.SBIPort)))
+	if addrs.FQDN != "" {
+		svc.SetFqdn(addrs.FQDN)
+	}
 	svc.SetAllowedPlmns(plmnList)
 	for _, serviceName := range serviceNames {
 		var nfServiceVersion models.NFServiceVersion
@@ -138,7 +150,7 @@ func getNfProfile(smfCtx *smfContext.SMFContext, sessionCfgs []nfConfigApi.Sessi
 	profile.SetNfInstanceId(smfCtx.NfInstanceID)
 	profile.SetNfType(models.NFTYPE_SMF)
 	profile.SetNfStatus(models.NFSTATUS_REGISTERED)
-	profile.SetIpv4Addresses([]string{advertisedRegisterIPv4})
+	openapiutils.SetNFProfileAddresses(&profile, addrs.FQDN, addrs.IPv4, addrs.IPv6)
 	util.SetNFProfileServices(&profile, nfServiceList)
 	profile.SetSmfInfo(smfInfo)
 	profile.SetSNssais(snssais)
@@ -388,7 +400,7 @@ func SendNrfForNfInstance(ctx context.Context, nrfUri string, targetNfType, requ
 		if _, ok := smfSelf.NfStatusSubscriptions.Load(nfProfile.GetNfInstanceId()); !ok {
 			nfInstanceIdCond := models.NewNfInstanceIdCond()
 			nfInstanceIdCond.SetNfInstanceId(nfProfile.GetNfInstanceId())
-			nrfSubscriptionData := models.NewSubscriptionData(fmt.Sprintf("%s://%s:%d/nsmf-callback/nf-status-notify", smfSelf.URIScheme, smfSelf.RegisterIPv4, smfSelf.SBIPort))
+			nrfSubscriptionData := models.NewSubscriptionData(smfSelf.GetSbiUri() + "/nsmf-callback/nf-status-notify")
 			nrfSubscriptionData.SetSubscrCond(models.SubscrCond{NfInstanceIdCond: nfInstanceIdCond})
 			nrfSubscriptionData.SetReqNfType(requestNfType)
 			logger.ConsumerLog.Debugf("Preparing NRF Subscription to %s with payload: %+v", nrfUri, nrfSubscriptionData)
@@ -438,7 +450,7 @@ func SendNFDiscoveryUDM() (*models.ProblemDetails, error) {
 			SDMConf := Nudm_SDM.NewConfiguration()
 			serverConfig := &SDMConf.Servers[0]
 			if apiRootVar, exists := serverConfig.Variables["apiRoot"]; exists {
-				apiRootVar.DefaultValue = service.GetApiPrefix()
+				apiRootVar.DefaultValue = smfContext.PeerServiceURI(&smfSelf.UDMProfile, &service)
 				serverConfig.Variables["apiRoot"] = apiRootVar
 			}
 			smfSelf.SubscriberDataManagementClient = Nudm_SDM.NewAPIClient(SDMConf)

@@ -25,6 +25,7 @@ import (
 	"github.com/omec-project/smf/logger"
 	"github.com/omec-project/smf/util"
 	"github.com/omec-project/util/drsm"
+	"github.com/omec-project/util/sbiaddr"
 )
 
 func init() {
@@ -48,8 +49,12 @@ type SMFContext struct {
 	NfInstanceID string
 
 	URIScheme    models.UriScheme
-	BindingIPv4  string
-	RegisterIPv4 string
+	BindingIPv4  string // the SBI listen host; despite the name, of either family
+	RegisterIPv4 string // the registered IPv4 address or host name
+	RegisterIPv6 string // the registered IPv6 address, if any
+	// SbiPreference picks the family of the SMF's own URIs and of peer URIs when both
+	// are available and there is no host name.
+	SbiPreference sbiaddr.Preference
 
 	UPNodeIDs []NodeID
 	Key       string
@@ -199,32 +204,13 @@ func InitSmfContext(config *factory.Config) *SMFContext {
 	smfContext.StaticIpInfo = configuration.StaticIpInfo
 
 	sbi := configuration.Sbi
-	localIp := GetLocalIP()
-	logger.CtxLog.Infof("sbi lb - localIp %v", localIp)
 	if sbi == nil {
 		logger.CtxLog.Errorln("configuration needs 'sbi' value")
 		return nil
 	} else {
 		smfContext.URIScheme = models.UriScheme(sbi.Scheme)
-		smfContext.RegisterIPv4 = factory.SMF_DEFAULT_IPV4 // default localhost
-		smfContext.SBIPort = factory.SMF_DEFAULT_PORT_INT  // default port
-
-		if sbi.RegisterIPv4 != "" {
-			smfContext.RegisterIPv4 = sbi.RegisterIPv4
-			if sbi.RegisterIPv4 == "POD_IP" {
-				podIP := os.Getenv("POD_IP")
-				if podIP != "" {
-					smfContext.RegisterIPv4 = podIP
-				} else if localIp != "" {
-					smfContext.RegisterIPv4 = localIp
-					logger.CtxLog.Warnln("POD_IP is not set; falling back to local IP for RegisterIPv4", localIp)
-				} else {
-					smfContext.RegisterIPv4 = factory.SMF_DEFAULT_IPV4
-					logger.CtxLog.Warnln("POD_IP is not set and local IP is unavailable; falling back to default RegisterIPv4", factory.SMF_DEFAULT_IPV4)
-				}
-			}
-			logger.CtxLog.Infoln("sbi lb - smf smfContext.RegisterIPv4", smfContext.RegisterIPv4)
-		}
+		smfContext.SBIPort = factory.SMF_DEFAULT_PORT_INT // default port
+		smfContext.resolveSbiAddrs(sbi, net.InterfaceAddrs)
 		if sbi.Port != 0 {
 			smfContext.SBIPort = sbi.Port
 		}
@@ -237,24 +223,13 @@ func InitSmfContext(config *factory.Config) *SMFContext {
 				smfContext.PEM = tls.PEM
 			}
 		}
-
-		smfContext.BindingIPv4 = os.Getenv(sbi.BindingIPv4)
-		if smfContext.BindingIPv4 != "" {
-			logger.CtxLog.Infoln("parsing ServerIPv4 address from ENV Variable")
-		} else {
-			smfContext.BindingIPv4 = sbi.BindingIPv4
-			if smfContext.BindingIPv4 == "" {
-				logger.CtxLog.Warnln("error parsing ServerIPv4 address as string. Using the 0.0.0.0 address as default")
-				smfContext.BindingIPv4 = "0.0.0.0"
-			}
-		}
 	}
 
 	if configuration.NrfUri != "" {
 		smfContext.NrfUri = configuration.NrfUri
 	} else {
 		logger.CtxLog.Warnln("NRF Uri is empty! Using localhost as NRF IPv4 address")
-		smfContext.NrfUri = fmt.Sprintf("%s://%s:%d", smfContext.URIScheme, "127.0.0.1", 29510)
+		smfContext.NrfUri = sbiaddr.URI(string(smfContext.URIScheme), "127.0.0.1", 29510)
 	}
 
 	if pfcp := configuration.PFCP; pfcp != nil {

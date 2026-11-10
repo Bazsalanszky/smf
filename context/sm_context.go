@@ -1049,7 +1049,7 @@ func (smContext *SMContext) RebuildCommunicationClient() {
 	communicationConf := Namf_Communication.NewConfiguration()
 	serverConfig := &communicationConf.Servers[0]
 	if apiRootVar, exists := serverConfig.Variables["apiRoot"]; exists {
-		apiRootVar.DefaultValue = service.GetApiPrefix()
+		apiRootVar.DefaultValue = PeerServiceURI(&smContext.AMFProfile, &service)
 		serverConfig.Variables["apiRoot"] = apiRootVar
 	}
 	smContext.CommunicationClient = Namf_Communication.NewAPIClient(communicationConf)
@@ -1066,7 +1066,7 @@ func (smContext *SMContext) RebuildSMPolicyClient() {
 	cfg := Npcf_SMPolicyControl.NewConfiguration()
 	serverConfig := &cfg.Servers[0]
 	if apiRootVar, exists := serverConfig.Variables["apiRoot"]; exists {
-		apiRootVar.DefaultValue = service.GetApiPrefix()
+		apiRootVar.DefaultValue = PeerServiceURI(&smContext.SelectedPCFProfile, &service)
 		serverConfig.Variables["apiRoot"] = apiRootVar
 	}
 	smContext.SMPolicyClient = Npcf_SMPolicyControl.NewAPIClient(cfg)
@@ -1143,7 +1143,7 @@ func (smContext *SMContext) PCFSelection() error {
 		cfg := Npcf_SMPolicyControl.NewConfiguration()
 		serverConfig := &cfg.Servers[0]
 		if apiRootVar, exists := serverConfig.Variables["apiRoot"]; exists {
-			apiRootVar.DefaultValue = service.GetApiPrefix()
+			apiRootVar.DefaultValue = PeerServiceURI(&smContext.SelectedPCFProfile, &service)
 			serverConfig.Variables["apiRoot"] = apiRootVar
 		}
 		smContext.SMPolicyClient = Npcf_SMPolicyControl.NewAPIClient(cfg)
