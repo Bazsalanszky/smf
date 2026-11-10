@@ -668,7 +668,9 @@ func pinUplinkTunnelsToTheirExistingTeids(smContext *context.SMContext, nodeIP s
 				// Never established, so there is no tunnel to preserve. Not a fault.
 				continue
 			}
-			access := accessAddressOf(node.UPF, smContext.SelectedPDUSessionType)
+			// TODO(ipv6-p2): the pinned F-TEID is IPv4 only (V4/Ipv4Address); an IPv6 N3 address
+			// is treated as none rather than sent as 0.0.0.0.
+			access := accessAddressOf(node.UPF).To4()
 			if access == nil {
 				// Said out loud, because the alternative is a repair that quietly does nothing. An
 				// F-TEID carrying the V4 flag and no address is malformed and the UPF rejects the
@@ -750,21 +752,21 @@ func n3InterfaceCount(upf *context.UPF) int {
 
 // accessAddressOf returns the N3 address the RAN was told to send to.
 //
-// It resolves it the same way the N2 setup did, through UPFInterfaceInfo.IP on the first N3
-// interface. Reading IPv4EndPointAddresses directly is not equivalent: an interface configured by
-// FQDN carries no address there, and an earlier version of this returned nil for exactly that
-// reason, then built an F-TEID with the V4 flag and no address, which the UPF rejected as missing a
-// mandatory IE.
+// It resolves it the same way the N2 setup did, through UPFInterfaceInfo.TransportIP on the first
+// N3 interface with the UPF's transport family. Reading IPv4EndPointAddresses directly is not
+// equivalent: an interface configured by FQDN carries no address there, and an earlier version of
+// this returned nil for exactly that reason, then built an F-TEID with the V4 flag and no address,
+// which the UPF rejected as missing a mandatory IE.
 //
 // Deriving it the same way as the N2 build is the point, not a convenience: the address pinned here
 // has to be the one the RAN is sending to, and that is the only way to be sure of it.
-func accessAddressOf(upf *context.UPF, pduSessionType uint8) net.IP {
+func accessAddressOf(upf *context.UPF) net.IP {
 	upf.UpfLock.RLock()
 	defer upf.UpfLock.RUnlock()
 	if len(upf.N3Interfaces) == 0 {
 		return nil
 	}
-	address, err := upf.N3Interfaces[0].IP(pduSessionType)
+	address, err := upf.N3Interfaces[0].TransportIP(upf.TransportFamily)
 	if err != nil {
 		return nil
 	}

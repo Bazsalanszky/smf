@@ -503,7 +503,7 @@ func programAddedRule(smContext *smfContext.SMContext, pfcpParam *pfcpParam, nod
 		ulPDR.PDI.SourceInterface = smfContext.SourceInterface{InterfaceValue: smfContext.SourceInterfaceAccess}
 		// The F-TEID the RAN was given, named outright: a CHOOSE with no CHOOSE ID is not tied to
 		// it, so a user plane that follows the spec would allocate this PDR a TEID of its own.
-		if ulPDR.PDI.LocalFTeid = installedUplinkFTEID(smContext, node); ulPDR.PDI.LocalFTeid == nil {
+		if ulPDR.PDI.LocalFTeid = installedUplinkFTEID(node); ulPDR.PDI.LocalFTeid == nil {
 			pfcpParam.unbuilt = append(pfcpParam.unbuilt,
 				fmt.Errorf("PCC rule %s: the F-TEID of its uplink tunnel is not known", name))
 		}
@@ -594,7 +594,7 @@ func requalifyRule(smContext *smfContext.SMContext, pfcpParam *pfcpParam, node *
 
 		var fteid *smfContext.FTEID
 		if local := pdr.PDI.LocalFTeid; local != nil && local.Ch {
-			if fteid = installedUplinkFTEID(smContext, node); fteid == nil {
+			if fteid = installedUplinkFTEID(node); fteid == nil {
 				logger.PduSessLog.Errorf("PCC rule %s PDR %d keeps its previous rates: its tunnel's F-TEID is not known",
 					name, pdr.PDRID)
 				pfcpParam.unbuilt = append(pfcpParam.unbuilt,
@@ -676,11 +676,11 @@ func undoRequalified(pfcpParam *pfcpParam) {
 // The F-TEID is named as restoration pins it, from the tunnel's TEID and the N3 address the RAN
 // was given. An address that is not IPv4 is not known here: the F-TEID is built as IPv4, as the
 // SMF builds its sessions, and an IPv6 address would go on the wire as 0.0.0.0.
-func installedUplinkFTEID(smContext *smfContext.SMContext, node *smfContext.DataPathNode) *smfContext.FTEID {
+func installedUplinkFTEID(node *smfContext.DataPathNode) *smfContext.FTEID {
 	if node.UpLinkTunnel == nil || node.UpLinkTunnel.TEID == 0 || node.UPF == nil {
 		return nil
 	}
-	access := accessAddressOf(node.UPF, smContext.SelectedPDUSessionType).To4()
+	access := accessAddressOf(node.UPF).To4()
 	if access == nil {
 		return nil
 	}

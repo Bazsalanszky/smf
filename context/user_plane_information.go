@@ -130,19 +130,20 @@ func BuildUserPlaneInformationFromSessionManagement(existing *UserPlaneInformati
 			SNssaiInfos: []models.SnssaiUpfInfoItem{snssaiInfoModel},
 		}
 		var interfaceInfoList []factory.InterfaceUpfInfoItem
-		ipStr := nodeID.ResolveNodeIdToIp().String()
+		transportFamily := smfContext.UPFTransportFamily[upfName]
+		endpoints := upfTransportEndpoints(nodeID, transportFamily)
 
 		for _, ipDomain := range sm.IpDomain {
 			n3 := factory.InterfaceUpfInfoItem{
 				InterfaceType:   models.UPINTERFACETYPE_N3,
 				NetworkInstance: ipDomain.DnnName,
-				Endpoints:       []string{ipStr},
+				Endpoints:       endpoints,
 			}
 			interfaceInfoList = append(interfaceInfoList, n3)
 			n9 := factory.InterfaceUpfInfoItem{
 				InterfaceType:   models.UPINTERFACETYPE_N9,
 				NetworkInstance: ipDomain.DnnName,
-				Endpoints:       []string{ipStr},
+				Endpoints:       endpoints,
 			}
 			interfaceInfoList = append(interfaceInfoList, n9)
 		}
@@ -153,6 +154,11 @@ func BuildUserPlaneInformationFromSessionManagement(existing *UserPlaneInformati
 		}
 		node.InterfaceUpfInfoList = interfaceInfoList
 		upfNode := getOrCreateUpfNode(existing, upfName, node)
+		if upfNode.UPF != nil {
+			upfNode.UPF.UpfLock.Lock()
+			upfNode.UPF.TransportFamily = transportFamily
+			upfNode.UPF.UpfLock.Unlock()
+		}
 		logger.CtxLog.Infof("UPF node details: %s, IP: %s, ID: %s, UPF: %+v", upfName, nodeID.ResolveNodeIdToIp().String(), nodeIDStr, upfNode.UPF)
 
 		existing.UPFs[upfName] = upfNode
@@ -194,6 +200,26 @@ func BuildUserPlaneInformationFromSessionManagement(existing *UserPlaneInformati
 	removeInactiveUPNodes(existing.UPNodes, currentUPFs, currentANs)
 	logger.CtxLog.Infof("UPF nodes: %+v", existing.UPNodes)
 	return existing
+}
+
+// upfTransportEndpoints returns the N3/N9 endpoint a UPF configured by its Node ID gets: the
+// Node ID's address. For an FQDN UPF with a transport family override the name is resolved in
+// that family, since the Node ID's own address is chosen for N4 and may be of the other one.
+// A name that does not resolve gives no endpoint; it used to give "0.0.0.0".
+func upfTransportEndpoints(nodeID NodeID, family AddressFamily) []string {
+	if nodeID.NodeIdType == NodeIdTypeFqdn && family != AddressFamilyAuto {
+		if ip, err := lookupFamilyAddress(string(nodeID.NodeIdValue), family); err == nil {
+			return []string{ip.String()}
+		} else {
+			logger.CtxLog.Warnf("UPF %s has no %s transport address: %v", nodeID.ValueString(), family, err)
+		}
+	}
+	ip := nodeID.ResolveNodeIdToIp()
+	if ip == nil {
+		logger.CtxLog.Warnf("UPF %s does not resolve; no N3/N9 endpoint configured", nodeID.ValueString())
+		return nil
+	}
+	return []string{ip.String()}
 }
 
 func CreateNodeIDFromHostname(hostname string) NodeID {

@@ -11,13 +11,11 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"reflect"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/omec-project/nas/v2/nasMessage"
 	"github.com/omec-project/openapi/v2/models"
 	"github.com/omec-project/smf/factory"
 	"github.com/omec-project/smf/logger"
@@ -92,6 +90,10 @@ type UPF struct {
 	uuid                   uuid.UUID
 	Port                   uint16
 	NHeartBeat             uint8
+	// TransportFamily restricts the N3/N9 (GTP-U) transport to one family; the zero
+	// value lets each interface use what it has (see UPFInterfaceInfo.TransportIP). It is
+	// set from the upfTransportFamily configuration, under UpfLock.
+	TransportFamily AddressFamily
 
 	// lock
 	UpfLock sync.RWMutex
@@ -137,38 +139,41 @@ func NewUPFInterfaceInfo(i *factory.InterfaceUpfInfoItem) *UPFInterfaceInfo {
 	return interfaceInfo
 }
 
-// *** add unit test ***//
-// IP returns the IP of the user plane IP information of the pduSessType
-func (i *UPFInterfaceInfo) IP(pduSessType uint8) (net.IP, error) {
-	if (pduSessType == nasMessage.PDUSessionTypeIPv4 || pduSessType == nasMessage.PDUSessionTypeIPv4IPv6) && len(i.IPv4EndPointAddresses) != 0 {
-		return i.IPv4EndPointAddresses[0].To4(), nil
-	}
-
-	if (pduSessType == nasMessage.PDUSessionTypeIPv6 || pduSessType == nasMessage.PDUSessionTypeIPv4IPv6) && len(i.IPv6EndPointAddresses) != 0 {
-		return i.IPv6EndPointAddresses[0], nil
-	}
-
-	if i.EndpointFQDN != "" {
-		if resolvedAddr, err := net.ResolveIPAddr("ip", i.EndpointFQDN); err != nil {
-			logger.CtxLog.Errorf("resolve addr [%s] failed", i.EndpointFQDN)
-		} else {
-			switch pduSessType {
-			case nasMessage.PDUSessionTypeIPv4:
-				return resolvedAddr.IP.To4(), nil
-			case nasMessage.PDUSessionTypeIPv6:
-				return resolvedAddr.IP.To16(), nil
-			default:
-				v4addr := resolvedAddr.IP.To4()
-				if v4addr != nil {
-					return v4addr, nil
-				} else {
-					return resolvedAddr.IP.To16(), nil
-				}
-			}
+// TransportIP returns the GTP-U (N3/N9) address of this interface in the given family:
+// the first configured address of that family, or the configured FQDN resolved in that
+// family. AddressFamilyAuto takes IPv4 when the interface has an IPv4 address and IPv6
+// otherwise. An IPv4 address is returned in 4-byte form, an IPv6 one in 16-byte form, so
+// the length is the NGAP TransportLayerAddress length.
+//
+// The family used to be chosen by the UE's PDU session type, which ties the transport to
+// what the UE asked for: an IPv4 session over an IPv6-only N3 found no address, and the
+// IPv4 branch returned the To4() of an IPv6 FQDN answer -- nil, with no error. The
+// transport family is now a property of the UPF (UPF.TransportFamily), never of the
+// session. With the default, an interface with an IPv4 address is used over IPv4, as an
+// IPv4 session used it before.
+func (i *UPFInterfaceInfo) TransportIP(family AddressFamily) (net.IP, error) {
+	if family != AddressFamilyIPv6 && len(i.IPv4EndPointAddresses) != 0 {
+		if v4 := i.IPv4EndPointAddresses[0].To4(); v4 != nil {
+			return v4, nil
 		}
 	}
-
-	return nil, errors.New("not matched ip address")
+	if family != AddressFamilyIPv4 && len(i.IPv6EndPointAddresses) != 0 {
+		return i.IPv6EndPointAddresses[0].To16(), nil
+	}
+	if i.EndpointFQDN != "" {
+		ip, err := lookupFamilyAddress(i.EndpointFQDN, family)
+		if err != nil {
+			logger.CtxLog.Errorf("resolve addr [%s] failed: %v", i.EndpointFQDN, err)
+		} else if v4 := ip.To4(); v4 != nil {
+			return v4, nil
+		} else {
+			return ip, nil
+		}
+	}
+	if family == AddressFamilyAuto {
+		return nil, errors.New("not matched ip address")
+	}
+	return nil, fmt.Errorf("not matched ip address: no %s address on the interface", family)
 }
 
 func (upfSelectionParams *UPFSelectionParams) String() string {
@@ -362,6 +367,13 @@ func (upf *UPF) PFCPPort() uint16 {
 	return upf.Port
 }
 
+// GetTransportFamily returns TransportFamily for a caller that does not hold UpfLock.
+func (upf *UPF) GetTransportFamily() AddressFamily {
+	upf.UpfLock.RLock()
+	defer upf.UpfLock.RUnlock()
+	return upf.TransportFamily
+}
+
 func (upf *UPF) PFCPAddr() *net.UDPAddr {
 	return &net.UDPAddr{
 		IP:   upf.NodeID.ResolveNodeIdToIp(),
@@ -369,21 +381,12 @@ func (upf *UPF) PFCPAddr() *net.UDPAddr {
 	}
 }
 
-// *** add unit test ***//
+// RetrieveUPFNodeByNodeID returns the UPF registered for nodeID, matched with sameNode, or nil.
 func RetrieveUPFNodeByNodeID(nodeID NodeID) *UPF {
 	var targetUPF *UPF = nil
 	upfPool.Range(func(key, value any) bool {
 		curUPF := value.(*UPF)
-		if curUPF.NodeID.NodeIdType != nodeID.NodeIdType &&
-			(curUPF.NodeID.NodeIdType == NodeIdTypeFqdn || nodeID.NodeIdType == NodeIdTypeFqdn) {
-			curUPFNodeIdIP := curUPF.NodeID.ResolveNodeIdToIp().To4()
-			nodeIdIP := nodeID.ResolveNodeIdToIp().To4()
-			logger.CtxLog.Debugf("retrieveUPF - upfNodeIdIP:[%+v], nodeIdIP:[%+v]", curUPFNodeIdIP, nodeIdIP)
-			if reflect.DeepEqual(curUPFNodeIdIP, nodeIdIP) {
-				targetUPF = curUPF
-				return false
-			}
-		} else if reflect.DeepEqual(curUPF.NodeID, nodeID) {
+		if sameNode(curUPF.NodeID, nodeID) {
 			targetUPF = curUPF
 			return false
 		}
@@ -419,21 +422,13 @@ func findUPFByNodeID(nodeID NodeID) *UPF {
 	return found
 }
 
-// *** add unit test ***//
+// RemoveUPFNodeByNodeID removes the UPF registered for nodeID, matched with sameNode.
 func RemoveUPFNodeByNodeID(nodeID NodeID) bool {
 	upfID := ""
 	upfPool.Range(func(key, value any) bool {
 		upfID = key.(string)
 		upf := value.(*UPF)
-		if upf.NodeID.NodeIdType != nodeID.NodeIdType &&
-			(upf.NodeID.NodeIdType == NodeIdTypeFqdn || nodeID.NodeIdType == NodeIdTypeFqdn) {
-			upfNodeIdIP := upf.NodeID.ResolveNodeIdToIp().To4()
-			nodeIdIP := nodeID.ResolveNodeIdToIp().To4()
-			logger.CtxLog.Debugf("removeUPF - upfNodeIdIP:[%+v], nodeIdIP:[%+v]", upfNodeIdIP, nodeIdIP)
-			if reflect.DeepEqual(upfNodeIdIP, nodeIdIP) {
-				return false
-			}
-		} else if reflect.DeepEqual(upf.NodeID, nodeID) {
+		if sameNode(upf.NodeID, nodeID) {
 			return false
 		}
 		upfID = ""

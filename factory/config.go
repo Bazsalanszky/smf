@@ -74,6 +74,11 @@ type Configuration struct {
 	ULCL                     bool              `yaml:"ulcl,omitempty"`
 	PCSCFInfo                PCSCFInfo         `yaml:"pcscfInfos,omitempty"`
 	T3591                    *TimerValue       `yaml:"t3591,omitempty"`
+	// UpfTransportFamily optionally restricts the N3/N9 (GTP-U) transport of a UPF to
+	// one family, "ipv4" or "ipv6", keyed by the UPF hostname the session management
+	// configuration names it by. A UPF not listed uses the addresses it has, IPv4 first.
+	// The family is never derived from the UE's PDU session type.
+	UpfTransportFamily map[string]string `yaml:"upfTransportFamily,omitempty"`
 }
 
 // TimerValue configures a NAS retransmission timer. It follows the shape the AMF uses for
@@ -112,8 +117,20 @@ type TLS struct {
 }
 
 type PFCP struct {
+	// Addr is the SMF's N4 address: an IP address, a host name, or the name of an
+	// environment variable holding either (helm sets POD_IP). It may also be a
+	// comma-separated list of IP addresses, one per family, such as POD_IPS from
+	// status.podIPs; the SMF then listens on both and puts both in its F-SEID.
 	Addr string `yaml:"addr,omitempty"`
-	Port uint16 `yaml:"port,omitempty"`
+	// NodeID optionally sets the Node ID the SMF advertises on N4: an IPv4 or IPv6
+	// address or an FQDN, or the name of an environment variable holding one. By
+	// default the Node ID is the N4 address.
+	NodeID string `yaml:"nodeId,omitempty"`
+	// PreferredFamily ("ipv4" or "ipv6") picks the Node ID when Addr lists one address
+	// per family, and the address used when a UPF's FQDN resolves to both. By default
+	// IPv4 is preferred, unless the SMF has no IPv4 N4 address.
+	PreferredFamily string `yaml:"preferredFamily,omitempty"`
+	Port            uint16 `yaml:"port,omitempty"`
 }
 
 type Path struct {
