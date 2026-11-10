@@ -913,11 +913,7 @@ func HandlePfcpSessionReportRequest(msg *udp.Message) {
 			jsonData := models.NewN1N2MessageTransferReqData()
 			jsonData.SetPduSessionId(smContext.PDUSessionID)
 			jsonData.SetSkipInd(false)
-			jsonData.SetN1n2FailureTxfNotifURI(fmt.Sprintf("%s://%s:%d%s",
-				smf_context.SMF_Self().URIScheme,
-				smf_context.SMF_Self().RegisterIPv4,
-				smf_context.SMF_Self().SBIPort,
-				n1n2FailureTxfNotifURI))
+			jsonData.SetN1n2FailureTxfNotifURI(smf_context.SMF_Self().GetSbiUri() + n1n2FailureTxfNotifURI)
 			jsonData.SetN2InfoContainer(*n2InfoContainer)
 			n1n2Request.SetJsonData(*jsonData)
 

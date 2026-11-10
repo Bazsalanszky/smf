@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
-	"net"
 	"os"
 	"reflect"
 	"strconv"
@@ -622,20 +621,4 @@ func GetSmContextPool() *sync.Map {
 
 func StoreSmContextPool(smContext *SMContext) {
 	smContextPool.Store(smContext.Ref, smContext)
-}
-
-func GetLocalIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return ""
-	}
-	for _, address := range addrs {
-		// check the address type and if it is not a loopback the display it
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
-			}
-		}
-	}
-	return ""
 }

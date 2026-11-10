@@ -41,17 +41,15 @@ func SendSMPolicyAssociationCreate(smContext *smf_context.SMContext) (*models.Sm
 	var smPolicyData models.SmPolicyContextData
 	smPolicyData.SetSupi(smContext.Supi)
 	smPolicyData.SetPduSessionId(smContext.PDUSessionID)
-	smPolicyData.SetNotificationUri(fmt.Sprintf("%s://%s:%d/nsmf-callback/sm-policies/%s",
-		smf_context.SMF_Self().URIScheme,
-		smf_context.SMF_Self().RegisterIPv4,
-		smf_context.SMF_Self().SBIPort,
-		smContext.Ref,
-	))
+	smPolicyData.SetNotificationUri(smf_context.SMF_Self().GetSbiUri() + "/nsmf-callback/sm-policies/" + smContext.Ref)
 	smPolicyData.SetDnn(smContext.Dnn)
 	smPolicyData.SetPduSessionType(pduSessionType)
 	smPolicyData.SetAccessType(smContext.AnType)
 	smPolicyData.SetRatType(smContext.RatType)
-	smPolicyData.SetIpv4Address(smContext.PDUAddress.Ip.To4().String())
+	// Only an IPv4 address: To4 of anything else is nil, which used to be sent as "<nil>".
+	if ueIpv4 := smContext.PDUAddress.Ip.To4(); ueIpv4 != nil {
+		smPolicyData.SetIpv4Address(ueIpv4.String())
+	}
 	if smContext.DnnConfiguration.HasSessionAmbr() {
 		smPolicyData.SetSubsSessAmbr(smContext.DnnConfiguration.GetSessionAmbr())
 	}
