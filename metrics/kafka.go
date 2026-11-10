@@ -12,6 +12,7 @@ import (
 
 	"github.com/omec-project/smf/factory"
 	"github.com/omec-project/smf/logger"
+	"github.com/omec-project/smf/util"
 	mi "github.com/omec-project/util/metricinfo"
 	"github.com/segmentio/kafka-go"
 )
@@ -28,12 +29,8 @@ func InitialiseKafkaStream(config *factory.Configuration) error {
 		return nil
 	}
 
-	brokerUrl := "kafka:9092"
+	brokerUrl := kafkaBrokerAddr(config.KafkaInfo.BrokerUri, config.KafkaInfo.BrokerPort)
 	topicName := "sdcore-data-source-smf"
-
-	if config.KafkaInfo.BrokerUri != "" && config.KafkaInfo.BrokerPort != 0 {
-		brokerUrl = fmt.Sprintf("%s:%d", config.KafkaInfo.BrokerUri, config.KafkaInfo.BrokerPort)
-	}
 
 	logger.KafkaLog.Debugf("initialise kafka broker url: %s", brokerUrl)
 
@@ -72,6 +69,17 @@ func InitialiseKafkaStream(config *factory.Configuration) error {
 
 	logger.KafkaLog.Debugf("initialising kafka stream with url[%s], topic[%s]", brokerUrl, topicName)
 	return nil
+}
+
+// kafkaBrokerAddr returns the host:port of the Kafka broker: "kafka:9092" unless
+// both brokerUri and brokerPort are configured. util.HostPort brackets an IPv6
+// literal brokerUri, which fmt.Sprintf("%s:%d") did not: kafka-go read
+// "fd00::1:9092" as a host name and the dial failed with "lookup fd00::1:9092".
+func kafkaBrokerAddr(brokerUri string, brokerPort int) string {
+	if brokerUri == "" || brokerPort == 0 {
+		return "kafka:9092"
+	}
+	return util.HostPort(brokerUri, brokerPort)
 }
 
 func GetWriter() Writer {

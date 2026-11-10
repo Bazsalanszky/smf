@@ -23,6 +23,7 @@ import (
 	"github.com/omec-project/openapi/v2/nfConfigApi"
 	"github.com/omec-project/smf/factory"
 	"github.com/omec-project/smf/logger"
+	"github.com/omec-project/smf/util"
 	"github.com/omec-project/util/drsm"
 )
 
@@ -142,6 +143,27 @@ func AllocateLocalSEID() (uint64, error) {
 	}
 }
 
+// resolvePfcpAddr fills in the defaults of the PFCP configuration and resolves
+// the address the SMF uses for N4. pfcp.Addr may name an environment variable
+// (helm sets it to POD_IP), an IP literal or a hostname. util.HostPort brackets
+// an IPv6 literal; the previous fmt.Sprintf("%s:%d") did not, so an IPv6 POD_IP
+// was rejected with "too many colons in address" and the SMF did not start.
+func resolvePfcpAddr(pfcp *factory.PFCP) (*net.UDPAddr, error) {
+	if pfcp.Port == 0 {
+		pfcp.Port = DefaultPfcpPort
+	}
+	pfcpAddrEnv := os.Getenv(pfcp.Addr)
+	if pfcpAddrEnv != "" {
+		logger.CtxLog.Infoln("parsing PFCP IPv4 address from ENV variable found")
+		pfcp.Addr = pfcpAddrEnv
+	}
+	if pfcp.Addr == "" {
+		logger.CtxLog.Warnln("error parsing PFCP IPv4 address as string. Using the 0.0.0.0 address as default")
+		pfcp.Addr = "0.0.0.0"
+	}
+	return net.ResolveUDPAddr("udp", util.HostPort(pfcp.Addr, int(pfcp.Port)))
+}
+
 func InitSmfContext(config *factory.Config) *SMFContext {
 	if config == nil {
 		logger.CtxLog.Errorln("config is nil")
@@ -231,19 +253,7 @@ func InitSmfContext(config *factory.Config) *SMFContext {
 	}
 
 	if pfcp := configuration.PFCP; pfcp != nil {
-		if pfcp.Port == 0 {
-			pfcp.Port = DefaultPfcpPort
-		}
-		pfcpAddrEnv := os.Getenv(pfcp.Addr)
-		if pfcpAddrEnv != "" {
-			logger.CtxLog.Infoln("parsing PFCP IPv4 address from ENV variable found")
-			pfcp.Addr = pfcpAddrEnv
-		}
-		if pfcp.Addr == "" {
-			logger.CtxLog.Warnln("error parsing PFCP IPv4 address as string. Using the 0.0.0.0 address as default")
-			pfcp.Addr = "0.0.0.0"
-		}
-		addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", pfcp.Addr, pfcp.Port))
+		addr, err := resolvePfcpAddr(pfcp)
 		if err != nil {
 			logger.CtxLog.Errorf("PFCP Parse Addr Fail: %v", err)
 			return nil
