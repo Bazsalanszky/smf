@@ -89,10 +89,10 @@ func (t *ConsumerTable) Store(consumerAddr string, txTable *TxTable) {
 }
 
 func Run(Dispatch func(*Message)) {
-	addr := &net.UDPAddr{
-		IP:   net.ParseIP(context.SMF_Self().CPNodeID.ResolveNodeIdToIp().String()),
-		Port: context.SMF_Self().PFCPPort,
-	}
+	// The SMF's N4 address, not its Node ID: the Node ID may be an FQDN, or name the SMF from
+	// a family it does not bind. A dual-stack SMF gets the wildcard, which Go opens as one
+	// socket for both families.
+	addr := context.SMF_Self().PFCPListenAddr()
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		logger.PfcpLog.Errorf("Failed to listen on %s: %v", addr.String(), err)
@@ -237,7 +237,12 @@ func readPfcpMessage(server *PfcpServer) (*net.UDPAddr, message.Message, any, er
 			return addr, msg, nil, nil
 		}
 	} else if IsResponse(msg) {
-		tx, err := findTransaction(server, msg, server.Addr)
+		// Keyed by the socket's own address, as NewTransaction stored the request: Conn.LocalAddr,
+		// not the address Run asked for. The two differ for a wildcard bind -- "0.0.0.0:8805" is
+		// opened as a dual-stack socket and reports "[::]:8805" -- and looking the response up
+		// under server.Addr then found no transaction, so every response was dropped.
+		local, _ := server.Conn.LocalAddr().(*net.UDPAddr)
+		tx, err := findTransaction(server, msg, local)
 		if err != nil {
 			return addr, msg, nil, err
 		}
