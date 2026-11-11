@@ -79,6 +79,26 @@ type Configuration struct {
 	// configuration names it by. A UPF not listed uses the addresses it has, IPv4 first.
 	// The family is never derived from the UE's PDU session type.
 	UpfTransportFamily map[string]string `yaml:"upfTransportFamily,omitempty"`
+	// CPGtpu optionally runs the SMF's own GTP-U endpoint, which answers the router
+	// solicitations of IPv6 PDU sessions and sends their router advertisements. Unset, the
+	// SMF installs no router advertisement rules and sends none, as before.
+	CPGtpu *CPGtpu `yaml:"cpGtpu,omitempty"`
+}
+
+// CPGtpu configures the SMF's GTP-U endpoint (TS 29.244 clause 5.3: the CP function as the
+// source and destination of user plane packets).
+type CPGtpu struct {
+	// Addr is the address the endpoint listens on and the UPFs send router solicitations to:
+	// an IP address, or one per family separated by a comma (the form of POD_IPS), or the name
+	// of an environment variable holding either. It must be reachable from the UPFs' N3
+	// sockets, in a family they have one in.
+	Addr string `yaml:"addr,omitempty"`
+	// PreferredFamily ("ipv4" or "ipv6") picks the family router advertisements are sent in
+	// when the UPF gave an address in both. By default IPv4.
+	PreferredFamily string `yaml:"preferredFamily,omitempty"`
+	// Port is the UDP port; by default 2152, the GTP-U port, which a UPF sends to whatever
+	// port it is told.
+	Port uint16 `yaml:"port,omitempty"`
 }
 
 // TimerValue configures a NAS retransmission timer. It follows the shape the AMF uses for
