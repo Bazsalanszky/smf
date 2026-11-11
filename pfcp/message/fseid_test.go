@@ -36,7 +36,8 @@ func TestNewCPFSEID(t *testing.T) {
 	}
 }
 
-// The session requests put the SMF's address in the F-SEID slot of its family, and a
+// The session requests that carry a CP F-SEID (establishment and modification; a deletion has
+// none, TS 29.244 clause 7.5.6) put the SMF's address in the F-SEID slot of its family, and a
 // dual-stack SMF's addresses in both.
 func TestSessionRequestsFSEIDByFamily(t *testing.T) {
 	v4, v6 := net.ParseIP("10.0.0.1"), net.ParseIP("fd00::1")
@@ -65,12 +66,6 @@ func TestSessionRequestsFSEIDByFamily(t *testing.T) {
 				t.Fatal(err)
 			}
 			checkFSEID(t, mod.CPFSEID, 7, tc.wantV4, tc.wantV6)
-
-			del := message.BuildPfcpSessionDeletionRequest(3, 7, 8, tc.first, tc.more...)
-			if len(del.IEs) != 1 {
-				t.Fatalf("deletion request has %d IEs, want the F-SEID only", len(del.IEs))
-			}
-			checkFSEID(t, del.IEs[0], 7, tc.wantV4, tc.wantV6)
 		})
 	}
 }
