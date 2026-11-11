@@ -1123,16 +1123,33 @@ func (smContext *SMContext) BuildCreatedData() (createdData *models.SmContextCre
 	return
 }
 
+// PDUAddressToNAS encodes the PDU address information of the PDU address IE (TS 24.501 clause
+// 9.11.4.10) and the IE's length, which counts the PDU session type octet before it:
+//   - IPv4: the IPv4 address, length 5;
+//   - IPv6: the 8-octet interface identifier, length 9;
+//   - IPv4v6: the interface identifier followed by the IPv4 address, length 13.
+//
+// The UE builds its link-local address from the interface identifier, and its global address from
+// the identifier and the prefix the router advertisement announces (TS 23.501 clause 5.8.2.2.2).
+// A family the session does not hold is encoded as zeros.
 func (smContext *SMContext) PDUAddressToNAS() (addr [12]byte, addrLen uint8) {
-	copy(addr[:], smContext.PDUAddress.Ip)
+	var iid InterfaceIdentifier
+	if smContext.PDUAddress.Ipv6Iid != nil {
+		iid = *smContext.PDUAddress.Ipv6Iid
+	}
 	switch smContext.SelectedPDUSessionType {
 	case nasMessage.PDUSessionTypeIPv4:
+		copy(addr[:4], smContext.PDUAddress.Ip.To4())
 		addrLen = 4 + 1
 	case nasMessage.PDUSessionTypeIPv6:
+		copy(addr[:8], iid[:])
+		addrLen = 8 + 1
 	case nasMessage.PDUSessionTypeIPv4IPv6:
+		copy(addr[:8], iid[:])
+		copy(addr[8:], smContext.PDUAddress.Ip.To4())
 		addrLen = 12 + 1
 	}
-	return
+	return addr, addrLen
 }
 
 // PCFSelection will select PCF for this SM Context

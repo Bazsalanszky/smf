@@ -64,7 +64,14 @@ func (smContext *SMContext) HandlePDUSessionEstablishmentRequest(req *nasMessage
 			smContext.SubGsmLog.Debugln("Container Length:", container.LengthOfContents)
 			switch container.ProtocolOrContainerID {
 			case nasMessage.PCSCFIPv6AddressRequestUL:
-				smContext.SubGsmLog.Infoln("Didn't Implement container type PCSCFIPv6AddressRequestUL")
+				// Answered for a session with IPv6 only, and recorded only for one, so that an
+				// IPv4 session is stored as before.
+				if SessionHasIpv6(smContext.SelectedPDUSessionType) {
+					smContext.ProtocolConfigurationOptions.PCSCFIPv6Request = true
+					smContext.SubGsmLog.Infoln("PCSCFIPv6AddressRequestUL has been set true")
+				} else {
+					smContext.SubGsmLog.Infoln("PCSCFIPv6AddressRequestUL ignored: the session has no IPv6")
+				}
 			case nasMessage.IMCNSubsystemSignalingFlagUL:
 				smContext.SubGsmLog.Infoln("Didn't Implement container type IMCNSubsystemSignalingFlagUL")
 			case nasMessage.DNSServerIPv6AddressRequestUL:
