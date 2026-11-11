@@ -87,6 +87,9 @@ func createPDIIE(pdi *context.PDI) *ie.IE {
 	createPDIIes = append(createPDIIes,
 		ie.NewSourceInterface(pdi.SourceInterface.InterfaceValue),
 	)
+	if pdi.SourceInterfaceType != nil {
+		createPDIIes = append(createPDIIes, ie.NewTGPPInterfaceType(*pdi.SourceInterfaceType))
+	}
 
 	if pdi.LocalFTeid != nil {
 		fteidFlags := new(Flag)
@@ -184,6 +187,9 @@ func farToCreateFAR(far *context.FAR) *ie.IE {
 		forwardingParametersIEs := make([]*ie.IE, 0)
 		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewDestinationInterface(far.ForwardingParameters.DestinationInterface.InterfaceValue))
 		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewNetworkInstance(string(far.ForwardingParameters.NetworkInstance)))
+		if far.ForwardingParameters.DestinationInterfaceType != nil {
+			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewTGPPInterfaceType(*far.ForwardingParameters.DestinationInterfaceType))
+		}
 		if far.ForwardingParameters.OuterHeaderCreation != nil {
 			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewOuterHeaderCreation(
 				far.ForwardingParameters.OuterHeaderCreation.OuterHeaderCreationDescription,
@@ -259,6 +265,9 @@ func farToUpdateFAR(far *context.FAR) *ie.IE {
 		forwardingParametersIEs := make([]*ie.IE, 0)
 		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewDestinationInterface(far.ForwardingParameters.DestinationInterface.InterfaceValue))
 		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewNetworkInstance(string(far.ForwardingParameters.NetworkInstance)))
+		if far.ForwardingParameters.DestinationInterfaceType != nil {
+			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewTGPPInterfaceType(*far.ForwardingParameters.DestinationInterfaceType))
+		}
 		if far.ForwardingParameters.OuterHeaderCreation != nil {
 			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewOuterHeaderCreation(
 				far.ForwardingParameters.OuterHeaderCreation.OuterHeaderCreationDescription,

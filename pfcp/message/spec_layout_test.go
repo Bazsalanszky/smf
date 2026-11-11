@@ -111,3 +111,81 @@ func checkApplyAction(t *testing.T, where string, applyAction *ie.IE, wantFirst 
 		t.Errorf("%s: Apply Action octets %#v, want [%#x 0x00]", where, flags, wantFirst)
 	}
 }
+
+// The anchor's uplink FAR goes to Core, the uplink direction (TS 29.244 clause 8.2.24, NOTE 1),
+// with 3GPP Interface Type N6 (clause 8.2.118) to say it leaves for the data network; the uplink
+// PDI comes from Access with type N3 3GPP Access. Open5GS delivers uplink to the data network only
+// for Core with N6, and buffered every packet of the SGi-LAN/N6-LAN FAR the SMF used to send.
+func TestTheUplinkRulesNameTheirInterfaceTypesOnTheWire(t *testing.T) {
+	smContext := &context.SMContext{
+		PDUAddress: &context.UeIpAddr{Ip: net.IPv4(192, 168, 1, 1)},
+		Dnn:        "internet",
+	}
+	far := &context.FAR{FARID: 1}
+	dpNode := &context.DataPathNode{
+		UPF: &context.UPF{},
+		UpLinkTunnel: &context.GTPTunnel{
+			PDR: map[string]*context.PDR{"ALLOW-ALL": {PDRID: 1, FAR: far}},
+		},
+	}
+	if err := dpNode.ActivateUpLinkPdr(smContext, &context.QER{QERID: 1}, 10); err != nil {
+		t.Fatalf("ActivateUpLinkPdr: %v", err)
+	}
+
+	req := establishmentOnTheWire(t, []*context.PDR{dpNode.UpLinkTunnel.PDR["ALLOW-ALL"]}, []*context.FAR{far})
+	if len(req.CreatePDR) != 1 || len(req.CreateFAR) != 1 {
+		t.Fatalf("%d Create PDRs and %d Create FARs on the wire, want 1 and 1", len(req.CreatePDR), len(req.CreateFAR))
+	}
+
+	pdi, err := req.CreatePDR[0].PDI()
+	if err != nil {
+		t.Fatalf("decoding the PDI: %v", err)
+	}
+	checkInterface(t, "uplink PDI", pdi, ie.SourceInterface, ie.SrcInterfaceAccess, ie.TGPPInterfaceTypeN33GPPAccess)
+
+	fwd, err := req.CreateFAR[0].ForwardingParameters()
+	if err != nil {
+		t.Fatalf("decoding the forwarding parameters: %v", err)
+	}
+	checkInterface(t, "uplink FAR", fwd, ie.DestinationInterface, ie.DstInterfaceCore, ie.TGPPInterfaceTypeN6)
+}
+
+// An Update FAR carries the interface type too: a rule's FAR is rebuilt in a modification.
+func TestAnUpdatedUplinkFARKeepsItsInterfaceType(t *testing.T) {
+	n6 := context.InterfaceTypeN6
+	mod := modificationOnTheWire(t, []*context.FAR{{
+		FARID:       1,
+		State:       context.RULE_UPDATE,
+		ApplyAction: context.ApplyAction{Forw: true},
+		ForwardingParameters: &context.ForwardingParameters{
+			DestinationInterface:     context.DestinationInterface{InterfaceValue: context.DestinationInterfaceCore},
+			NetworkInstance:          []byte("internet"),
+			DestinationInterfaceType: &n6,
+		},
+	}})
+	if len(mod.UpdateFAR) != 1 {
+		t.Fatalf("%d Update FARs on the wire, want 1", len(mod.UpdateFAR))
+	}
+	fwd, err := mod.UpdateFAR[0].UpdateForwardingParameters()
+	if err != nil {
+		t.Fatalf("decoding the update forwarding parameters: %v", err)
+	}
+	checkInterface(t, "updated uplink FAR", fwd, ie.DestinationInterface, ie.DstInterfaceCore, ie.TGPPInterfaceTypeN6)
+}
+
+// checkInterface checks the Source or Destination Interface among ies, and the 3GPP Interface Type
+// that goes with it.
+func checkInterface(t *testing.T, where string, ies []*ie.IE, ifaceIE uint16, wantIface, wantType uint8) {
+	t.Helper()
+	iface := childIE(t, ies, ifaceIE)
+	if len(iface.Payload) != 1 || iface.Payload[0]&0x0f != wantIface {
+		t.Errorf("%s: interface octets %#v, want value %d", where, iface.Payload, wantIface)
+	}
+	typ, err := childIE(t, ies, ie.TGPPInterfaceType).TGPPInterfaceType()
+	if err != nil {
+		t.Fatalf("%s: decoding the 3GPP Interface Type: %v", where, err)
+	}
+	if typ != wantType {
+		t.Errorf("%s: 3GPP Interface Type %d, want %d", where, typ, wantType)
+	}
+}

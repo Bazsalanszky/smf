@@ -501,6 +501,7 @@ func programAddedRule(smContext *smfContext.SMContext, pfcpParam *pfcpParam, nod
 
 		// Set PDI and outer header removal for access interface
 		ulPDR.PDI.SourceInterface = smfContext.SourceInterface{InterfaceValue: smfContext.SourceInterfaceAccess}
+		ulPDR.PDI.SourceInterfaceType = node.UplinkSourceInterfaceType()
 		// The F-TEID the RAN was given, named outright: a CHOOSE with no CHOOSE ID is not tied to
 		// it, so a user plane that follows the spec would allocate this PDR a TEID of its own.
 		if ulPDR.PDI.LocalFTeid = installedUplinkFTEID(smContext, node); ulPDR.PDI.LocalFTeid == nil {
@@ -520,7 +521,8 @@ func programAddedRule(smContext *smfContext.SMContext, pfcpParam *pfcpParam, nod
 				DestinationInterface: smfContext.DestinationInterface{
 					InterfaceValue: smfContext.DestinationInterfaceCore,
 				},
-				NetworkInstance: []byte(smContext.Dnn),
+				NetworkInstance:          []byte(smContext.Dnn),
+				DestinationInterfaceType: node.UplinkDestinationInterfaceType(),
 			}
 			pfcpParam.farList = append(pfcpParam.farList, ulFAR)
 		} else {

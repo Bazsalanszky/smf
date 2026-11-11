@@ -91,6 +91,9 @@ type PDI struct {
 	ApplicationID   string
 	NetworkInstance nasType.Dnn
 	SourceInterface SourceInterface
+	// SourceInterfaceType is the 3GPP Interface Type of the source (TS 29.244 clause 8.2.118),
+	// sent only when set.
+	SourceInterfaceType *uint8
 }
 
 // Forwarding Action Rule. 7.5.2.3-1
@@ -117,6 +120,9 @@ type ForwardingParameters struct {
 	ForwardingPolicyID   string
 	NetworkInstance      nasType.Dnn
 	DestinationInterface DestinationInterface
+	// DestinationInterfaceType is the 3GPP Interface Type of the destination (TS 29.244 clause
+	// 8.2.118), sent only when set.
+	DestinationInterfaceType *uint8
 }
 
 type SuggestedBufferingPacketsCount struct {
