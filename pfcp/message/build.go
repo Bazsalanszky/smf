@@ -442,14 +442,13 @@ func BuildPfcpSessionModificationRequest(
 	), nil
 }
 
-// BuildPfcpSessionDeletionRequest builds the request; fseidAddr and moreFSEIDAddrs are as for
-// BuildPfcpSessionEstablishmentRequest.
+// BuildPfcpSessionDeletionRequest builds a request without IEs. TS 29.244 clause 7.5.6 identifies
+// the session by the UP F-SEID's SEID in the header and gives the message no CP F-SEID: a UPF that
+// parses it strictly drops a request that carries one (Open5GS does), and the session then stays
+// on the UPF.
 func BuildPfcpSessionDeletionRequest(
 	sequenceNumber uint32,
-	localSEID uint64,
 	remoteSEID uint64,
-	fseidAddr net.IP,
-	moreFSEIDAddrs ...net.IP,
 ) *message.SessionDeletionRequest {
 	return message.NewSessionDeletionRequest(
 		1,
@@ -457,7 +456,6 @@ func BuildPfcpSessionDeletionRequest(
 		remoteSEID,
 		sequenceNumber,
 		12,
-		NewCPFSEID(localSEID, append([]net.IP{fseidAddr}, moreFSEIDAddrs...)...),
 	)
 }
 
