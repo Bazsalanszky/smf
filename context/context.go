@@ -9,6 +9,7 @@ package context
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"sync"
@@ -396,6 +397,7 @@ func buildSnssaiSmfInfo(sm *nfConfigApi.SessionManagement, staticIpInfo []factor
 				reserveStaticIpsIfNeeded(allocator, staticIpInfo, dnn)
 			}
 		}
+		setIpv6DnnInfo(dnnInfo, &ipdomain)
 		info.DnnInfos[dnn] = dnnInfo
 	}
 	if len(info.DnnInfos) == 0 {
@@ -403,6 +405,50 @@ func buildSnssaiSmfInfo(sm *nfConfigApi.SessionManagement, staticIpInfo []factor
 	}
 
 	return info
+}
+
+// setIpv6DnnInfo reads the IPv6 part of a DNN's IP domain: the UE IPv6 pool (ueSubnetIpv6), the
+// length of the prefix each session takes from it (ueIpv6PrefixLength, 64 when absent), and the
+// IPv6 DNS server and P-CSCF sent in the PCO. A DNN without ueSubnetIpv6 serves no IPv6 session;
+// one with it and an empty ueSubnet serves IPv6 only. An invalid value is logged and ignored, as
+// an invalid ueSubnet is.
+func setIpv6DnnInfo(dnnInfo *SnssaiSmfDnnInfo, ipdomain *nfConfigApi.IpDomain) {
+	dnn := ipdomain.DnnName
+	if subnet := ipdomain.GetUeSubnetIpv6(); subnet != "" {
+		prefixLen := DefaultUeIpv6PrefixLength
+		if configured, ok := ipdomain.GetUeIpv6PrefixLengthOk(); ok {
+			prefixLen = int(*configured)
+		}
+		allocator, err := NewIpv6PrefixAllocator(subnet, prefixLen)
+		if err != nil {
+			logger.CtxLog.Warnf("invalid IPv6 subnet %s for DNN %s: %v", subnet, dnn, err)
+		} else {
+			dnnInfo.UeIpv6Allocator = allocator
+		}
+	}
+	if dns := ipdomain.GetDnsIpv6(); dns != "" {
+		if ip := parseIpv6(dns); ip != nil {
+			dnnInfo.DNS.IPv6Addr = ip
+		} else {
+			logger.CtxLog.Warnf("invalid IPv6 DNS server %q for DNN %s", dns, dnn)
+		}
+	}
+	if pcscf := ipdomain.GetPcscfIpv6(); pcscf != "" {
+		if ip := parseIpv6(pcscf); ip != nil {
+			dnnInfo.PCSCFIPv6 = ip
+		} else {
+			logger.CtxLog.Warnf("invalid IPv6 P-CSCF %q for DNN %s", pcscf, dnn)
+		}
+	}
+}
+
+// parseIpv6 parses an IPv6 address, nil for anything else, an IPv4-mapped address included.
+func parseIpv6(s string) net.IP {
+	addr, err := netip.ParseAddr(s)
+	if err != nil || !addr.Is6() || addr.Is4In6() || addr.Zone() != "" {
+		return nil
+	}
+	return net.IP(addr.AsSlice())
 }
 
 func reserveStaticIpsIfNeeded(allocator *IPAllocator, static []factory.StaticIpInfo, dnn string) {
