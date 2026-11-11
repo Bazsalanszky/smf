@@ -7,6 +7,7 @@ package context
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 
 	"github.com/omec-project/nas/v2/nasMessage"
@@ -147,4 +148,34 @@ func (smContext *SMContext) releaseUeIpv6Prefix() {
 	}
 	smContext.PDUAddress.Ipv6Prefix = nil
 	smContext.PDUAddress.Ipv6Iid = nil
+}
+
+// Ipv6UEIPAddress adds the session's IPv6 address to a UE IP Address IE (TS 29.244 clause 8.2.62):
+// V6 with the UE's full address, the prefix with the interface identifier the SMF gave the UE in
+// the PDU address, and IP6PL with the prefix length. The prefix length tells the user plane to
+// match the prefix, in which the UE may form other addresses as well (RFC 8981 temporary
+// addresses); the identifier is what it checks a link-local source against. The Open5GS SMF sends
+// the same address, without IP6PL; the Open5GS UPF keys the session on the /64 and drops a router
+// solicitation whose link-local identifier differs from the address's (src/upf/gtp-path.c), so
+// a prefix with a zero identifier would not do. A prefix without an identifier is sent as the
+// prefix. Nothing is added when the session holds no prefix.
+//
+// downlink sets S/D, for a PDI whose UE address is the destination (TS 29.244 clause 8.2.62).
+// It is set only with an IPv6 part: an IPv4-only IE keeps the S/D of 0 it has always had.
+func (a *UeIpAddr) Ipv6UEIPAddress(ueIP *UEIPAddress, downlink bool) {
+	if a == nil || a.Ipv6Prefix == nil {
+		return
+	}
+	prefix := a.Ipv6Prefix.Masked()
+	addr := prefix.Addr()
+	if a.Ipv6Iid != nil {
+		addr = Ipv6Address(prefix, *a.Ipv6Iid)
+	}
+	ueIP.V6 = true
+	ueIP.Ipv6Address = net.IP(addr.AsSlice())
+	ueIP.IP6PL = true
+	ueIP.Ipv6PrefixLength = uint8(prefix.Bits())
+	if downlink {
+		ueIP.Sd = true
+	}
 }

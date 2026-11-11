@@ -464,7 +464,7 @@ func programAddedRule(smContext *smfContext.SMContext, pfcpParam *pfcpParam, nod
 		// Set PDI fields for core interface
 		dlPDR.PDI.SourceInterface = smfContext.SourceInterface{InterfaceValue: smfContext.SourceInterfaceCore}
 		dlPDR.PDI.NetworkInstance = nasType.Dnn(smContext.Dnn)
-		dlPDR.PDI.UEIPAddress = sessionUEAddress(smContext, pfcpParam)
+		dlPDR.PDI.UEIPAddress = sessionUEAddress(smContext, pfcpParam, true)
 
 		// Configure FAR for downlink traffic. While the access connection is up, the rule forwards
 		// to the radio's end of the session's tunnel, as every other downlink rule does: nothing
@@ -508,7 +508,7 @@ func programAddedRule(smContext *smfContext.SMContext, pfcpParam *pfcpParam, nod
 				fmt.Errorf("PCC rule %s: the F-TEID of its uplink tunnel is not known", name))
 		}
 		ulPDR.PDI.NetworkInstance = nasType.Dnn(smContext.Dnn)
-		ulPDR.PDI.UEIPAddress = sessionUEAddress(smContext, pfcpParam)
+		ulPDR.PDI.UEIPAddress = sessionUEAddress(smContext, pfcpParam, false)
 		ulPDR.OuterHeaderRemoval = &smfContext.OuterHeaderRemoval{
 			OuterHeaderRemovalDescription: smfContext.OuterHeaderRemovalGtpUUdpIpv4,
 		}
@@ -544,13 +544,21 @@ func programAddedRule(smContext *smfContext.SMContext, pfcpParam *pfcpParam, nod
 //
 // An address the session does not hold -- none, or the unspecified one its release leaves -- is
 // not named, since the user plane reads either as any address too, and the rule is recorded as
-// not built.
-func sessionUEAddress(smContext *smfContext.SMContext, pfcpParam *pfcpParam) *smfContext.UEIPAddress {
-	if smContext.PDUAddress == nil || smContext.PDUAddress.Ip == nil || smContext.PDUAddress.Ip.IsUnspecified() {
+// not built. A session with IPv6 names its prefix as establishment does, so the IE carries
+// whichever of the families the session holds; downlink sets S/D with it.
+func sessionUEAddress(smContext *smfContext.SMContext, pfcpParam *pfcpParam, downlink bool) *smfContext.UEIPAddress {
+	addr := smContext.PDUAddress
+	hasIpv4 := addr != nil && addr.Ip != nil && !addr.Ip.IsUnspecified()
+	if !hasIpv4 && !addr.HasIpv6() {
 		pfcpParam.unbuilt = append(pfcpParam.unbuilt, errors.New("the session holds no UE address to bind its rules to"))
 		return nil
 	}
-	return &smfContext.UEIPAddress{V4: true, Ipv4Address: smContext.PDUAddress.Ip.To4()}
+	ueIP := &smfContext.UEIPAddress{}
+	if hasIpv4 {
+		ueIP.V4, ueIP.Ipv4Address = true, addr.Ip.To4()
+	}
+	addr.Ipv6UEIPAddress(ueIP, downlink)
+	return ueIP
 }
 
 // requalifyRule gives an established rule's PDRs a flow QER built from its changed QoS data, the

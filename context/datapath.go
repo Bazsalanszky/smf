@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/omec-project/nas/v2/nasMessage"
 	"github.com/omec-project/nas/v2/nasType"
 	"github.com/omec-project/openapi/v2/models"
 	"github.com/omec-project/smf/logger"
@@ -678,24 +679,34 @@ func (dpNode *DataPathNode) CreateSessRuleQer(smContext *SMContext) (*QER, error
 	return flowQER, nil
 }
 
-// ueIpAddressIE builds the UE IP Address IE for a PDI of this session.
+// ueIpAddressIE builds the UE IP Address IE for a PDI of this session; downlink is true for a PDI
+// whose UE address is the destination (Source Interface Core).
 //
-// A UPF that allocates is asked to choose (CHV4), except for a session on a staticIpInfo address:
-// that one is named, or the UPF allocates over it and the SMF adopts its choice.
+// The IPv4 part: a UPF that allocates is asked to choose (CHV4), except for a session on a
+// staticIpInfo address: that one is named, or the UPF allocates over it and the SMF adopts its
+// choice. An IPv6 session has no IPv4 part.
 //
 // Where the UPF allocates, a staticIpInfo address has to be outside the UPF's own pool. PFCP
 // cannot reserve it there, and the SMF cannot check it: the UPF's pool is not signalled over N4.
-func ueIpAddressIE(smContext *SMContext, upf *UPF) UEIPAddress {
-	if upf.IsUpfSupportUeIpAddrAlloc() && !smContext.HasStaticUeIpAddr() {
-		return UEIPAddress{CHV4: true}
+//
+// The IPv6 part is always the SMF's prefix (see Ipv6UEIPAddress): the SMF never asks the UPF to
+// choose one (CHV6).
+func ueIpAddressIE(smContext *SMContext, upf *UPF, downlink bool) UEIPAddress {
+	var ueIP UEIPAddress
+	if smContext.SelectedPDUSessionType != nasMessage.PDUSessionTypeIPv6 {
+		if upf.IsUpfSupportUeIpAddrAlloc() && !smContext.HasStaticUeIpAddr() {
+			ueIP.CHV4 = true
+		} else {
+			ueIP.V4, ueIP.Ipv4Address = true, smContext.PDUAddress.Ip.To4()
+		}
 	}
-
-	return UEIPAddress{V4: true, Ipv4Address: smContext.PDUAddress.Ip.To4()}
+	smContext.PDUAddress.Ipv6UEIPAddress(&ueIP, downlink)
+	return ueIP
 }
 
 // ActivateUpLinkPdr
 func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER, defPrecedence uint32) error {
-	ueIpAddr := ueIpAddressIE(smContext, dpNode.UPF)
+	ueIpAddr := ueIpAddressIE(smContext, dpNode.UPF, false)
 
 	curULTunnel := dpNode.UpLinkTunnel
 	for name, ULPDR := range curULTunnel.PDR {
@@ -770,7 +781,7 @@ func (dpNode *DataPathNode) ActivateDlLinkPdr(smContext *SMContext, defQER *QER,
 	var iface *UPFInterfaceInfo
 	curDLTunnel := dpNode.DownLinkTunnel
 
-	ueIpAddr := ueIpAddressIE(smContext, dpNode.UPF)
+	ueIpAddr := ueIpAddressIE(smContext, dpNode.UPF, true)
 
 	for name, DLPDR := range curDLTunnel.PDR {
 		logger.CtxLog.Infof("activate Downlink PDR[%v]:[%v]", name, DLPDR)
@@ -903,7 +914,7 @@ func (dataPath *DataPath) ActivateTunnelAndPDR(smContext *SMContext, precedence 
 			}
 		}
 
-		ueIpAddr := ueIpAddressIE(smContext, curDataPathNode.UPF)
+		ueIpAddr := ueIpAddressIE(smContext, curDataPathNode.UPF, true)
 
 		if curDataPathNode.DownLinkTunnel != nil {
 			if curDataPathNode.DownLinkTunnel.SrcEndPoint == nil {
