@@ -18,6 +18,7 @@ var (
 	CfgLog             = component.Category("CFG")
 	DataRepoLog        = component.Category("DRepo")
 	PfcpLog            = component.Category("PFCP")
+	GtpuLog            = component.Category("GTPU")
 	PduSessLog         = component.Category("PduSess")
 	GsmLog             = component.Category("GSM")
 	CtxLog             = component.Category("CTX")
