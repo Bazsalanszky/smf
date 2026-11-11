@@ -131,12 +131,20 @@ func TestBuildUserPlaneInformation_DefaultPathScenarios(t *testing.T) {
 			config: []nfConfigApi.SessionManagement{
 				makeTestSessionConfig("slice2", "001", "01", "1", "010102", "iot", "10.0.1.0/24", "10.1.1.2", []string{testGnb2}),
 			},
+			// The configuration is the whole set of slices, so a UPF it no longer names is gone
+			// from every map. UPFs used to keep it while UPNodes had dropped it.
 			assertions: func(t *testing.T, upi *UserPlaneInformation) {
-				if len(upi.UPFs) != 2 {
-					t.Errorf("expected 2 UPFs, got %d", len(upi.UPFs))
+				if len(upi.UPFs) != 1 {
+					t.Errorf("expected 1 UPF, got %d", len(upi.UPFs))
 				}
-				if _, ok := upi.UPFs["10.1.1.1"]; !ok {
-					t.Error("original UPF should still exist")
+				if _, ok := upi.UPFs["10.1.1.2"]; !ok {
+					t.Error("the new UPF should exist")
+				}
+				if _, ok := upi.UPFs["10.1.1.1"]; ok {
+					t.Error("the original UPF should be gone from UPFs")
+				}
+				if _, ok := upi.UPNodes["10.1.1.1"]; ok {
+					t.Error("the original UPF should be gone from UPNodes")
 				}
 			},
 		},
@@ -222,5 +230,86 @@ func TestLinkUpfToGnbNodesLinksEveryGnb(t *testing.T) {
 		if !linked[name] {
 			t.Errorf("gNB %s missing from upf.Links", name)
 		}
+	}
+}
+
+// defaultPathUPFs lists the UPF nodes the default paths go through.
+func defaultPathUPFs(upi *UserPlaneInformation) map[*UPNode]bool {
+	nodes := map[*UPNode]bool{}
+	for _, path := range upi.DefaultUserPlanePath {
+		for _, node := range path {
+			if node.Type == UPNODE_UPF {
+				nodes[node] = true
+			}
+		}
+	}
+	return nodes
+}
+
+// linksOnlyTo reports whether node links to want and nothing else.
+func linksOnlyTo(node, want *UPNode) bool {
+	return node != nil && want != nil && len(node.Links) == 1 && node.Links[0] == want
+}
+
+// A slice moved to another UPF (in the lab, BESS's "upf" to "upf-open5gs") must take the old UPF out
+// of the SMF's selection. The maps were rebuilt before the old node was removed, so UPFs and the
+// default paths kept it, and new PDU sessions were put on a UPF the configuration had dropped until
+// the SMF restarted. Moving back must link the returning UPF to its gNB again.
+func TestASliceChangeDropsTheUPFItNoLongerNames(t *testing.T) {
+	const oldUPF, newUPF = "10.1.1.1", "10.1.1.2"
+	slice := func(upf string) []nfConfigApi.SessionManagement {
+		return []nfConfigApi.SessionManagement{
+			makeTestSessionConfig("slice1", "001", "01", "1", "010101", "internet", "10.0.0.0/24", upf, []string{testGnb1}),
+		}
+	}
+
+	upi := BuildUserPlaneInformationFromSessionManagement(nil, slice(oldUPF))
+	upi = BuildUserPlaneInformationFromSessionManagement(upi, slice(newUPF))
+
+	if _, ok := upi.UPFs[oldUPF]; ok || len(upi.UPFs) != 1 {
+		t.Errorf("UPFs after the change: %v, want %s only", upi.UPFs, newUPF)
+	}
+	if _, ok := upi.UPNodes[oldUPF]; ok {
+		t.Errorf("UPNodes still has %s", oldUPF)
+	}
+	if got := defaultPathUPFs(upi); len(got) != 1 || !got[upi.UPNodes[newUPF]] {
+		t.Errorf("default paths go through %d UPFs, want %s only", len(got), newUPF)
+	}
+	if !linksOnlyTo(upi.UPNodes[testGnb1], upi.UPNodes[newUPF]) {
+		t.Errorf("gnb1 has %d links, want one, to %s", len(upi.UPNodes[testGnb1].Links), newUPF)
+	}
+
+	// And back: the old UPF returns under its name, as a new node, and gnb1 has to link to that
+	// node. A stale link to the removed one has the same NodeID, so it used to stop the new link.
+	upi = BuildUserPlaneInformationFromSessionManagement(upi, slice(oldUPF))
+	if !linksOnlyTo(upi.UPNodes[testGnb1], upi.UPNodes[oldUPF]) {
+		t.Errorf("gnb1 has %d links after the move back, want one, to the %s in UPNodes",
+			len(upi.UPNodes[testGnb1].Links), oldUPF)
+	}
+	if got := defaultPathUPFs(upi); len(got) != 1 || !got[upi.UPNodes[oldUPF]] {
+		t.Errorf("default paths go through %d UPFs after the move back, want %s only", len(got), oldUPF)
+	}
+}
+
+// A gNB the configuration no longer names leaves AccessNetwork and its UPF's links.
+func TestAGnbChangeDropsTheGnbItNoLongerNames(t *testing.T) {
+	const upf = "10.1.1.1"
+	slice := func(gnb string) []nfConfigApi.SessionManagement {
+		return []nfConfigApi.SessionManagement{
+			makeTestSessionConfig("slice1", "001", "01", "1", "010101", "internet", "10.0.0.0/24", upf, []string{gnb}),
+		}
+	}
+
+	upi := BuildUserPlaneInformationFromSessionManagement(nil, slice(testGnb1))
+	upi = BuildUserPlaneInformationFromSessionManagement(upi, slice(testGnb2))
+
+	if _, ok := upi.AccessNetwork[testGnb1]; ok {
+		t.Errorf("AccessNetwork still has %s", testGnb1)
+	}
+	if _, ok := upi.UPNodes[testGnb1]; ok {
+		t.Errorf("UPNodes still has %s", testGnb1)
+	}
+	if !linksOnlyTo(upi.UPNodes[upf], upi.UPNodes[testGnb2]) {
+		t.Errorf("the UPF has %d links, want one, to %s", len(upi.UPNodes[upf].Links), testGnb2)
 	}
 }
