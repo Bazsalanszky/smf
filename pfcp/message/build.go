@@ -82,6 +82,18 @@ func (f *Flag) setBit(position uint8, value bool) {
 	}
 }
 
+// newNetworkInstance builds the Network Instance IE of a rule in the DNN dnn. TS 29.244 clause
+// 8.2.4 encodes a DNN as an APN (TS 23.003 clause 9.1): each label preceded by its length, not the
+// dotted string. The raw string was sent before; a UPF that decodes the labels, as Open5GS does,
+// failed to read it and matched no DNN-bound UE pool. An empty DNN keeps the empty IE the SMF has
+// always sent.
+func newNetworkInstance(dnn []byte) *ie.IE {
+	if len(dnn) == 0 {
+		return ie.NewNetworkInstance("")
+	}
+	return ie.NewNetworkInstanceFQDN(string(dnn))
+}
+
 func createPDIIE(pdi *context.PDI) *ie.IE {
 	createPDIIes := make([]*ie.IE, 0)
 	createPDIIes = append(createPDIIes,
@@ -109,7 +121,7 @@ func createPDIIE(pdi *context.PDI) *ie.IE {
 	}
 
 	createPDIIes = append(createPDIIes,
-		ie.NewNetworkInstance(string(pdi.NetworkInstance)),
+		newNetworkInstance(pdi.NetworkInstance),
 	)
 	if pdi.UEIPAddress != nil {
 		ueIPAddressflags := new(Flag)
@@ -186,7 +198,7 @@ func farToCreateFAR(far *context.FAR) *ie.IE {
 	if far.ForwardingParameters != nil {
 		forwardingParametersIEs := make([]*ie.IE, 0)
 		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewDestinationInterface(far.ForwardingParameters.DestinationInterface.InterfaceValue))
-		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewNetworkInstance(string(far.ForwardingParameters.NetworkInstance)))
+		forwardingParametersIEs = append(forwardingParametersIEs, newNetworkInstance(far.ForwardingParameters.NetworkInstance))
 		if far.ForwardingParameters.DestinationInterfaceType != nil {
 			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewTGPPInterfaceType(*far.ForwardingParameters.DestinationInterfaceType))
 		}
@@ -264,7 +276,7 @@ func farToUpdateFAR(far *context.FAR) *ie.IE {
 	if far.ForwardingParameters != nil {
 		forwardingParametersIEs := make([]*ie.IE, 0)
 		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewDestinationInterface(far.ForwardingParameters.DestinationInterface.InterfaceValue))
-		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewNetworkInstance(string(far.ForwardingParameters.NetworkInstance)))
+		forwardingParametersIEs = append(forwardingParametersIEs, newNetworkInstance(far.ForwardingParameters.NetworkInstance))
 		if far.ForwardingParameters.DestinationInterfaceType != nil {
 			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewTGPPInterfaceType(*far.ForwardingParameters.DestinationInterfaceType))
 		}
