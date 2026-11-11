@@ -312,6 +312,12 @@ func BuildAddQoSRuleFromPccRule(pccRule *models.PccRule, qosData *models.QosData
 
 	qRule.BuildPacketFilterListFromPccRule(pccRule)
 
+	// Every flow may have been refused (see SetPfContent), and a rule that creates QoS without a
+	// packet filter is no more installable than one built from no flows.
+	if len(qRule.PacketFilterList) == 0 {
+		return nil
+	}
+
 	return &qRule
 }
 
@@ -344,6 +350,10 @@ func BuildModifyQosRuleFromPccRule(pccRule *models.PccRule, qosData *models.QosD
 		OperationCodeModifyExistingQoSRuleAndReplaceAllPacketFilters,
 		OperationCodeModifyExistingQoSRuleAndDeletePacketFilters:
 		qRule.BuildPacketFilterListFromPccRule(pccRule)
+		// As for a new rule: none of the flows could be encoded.
+		if len(qRule.PacketFilterList) == 0 {
+			return nil
+		}
 	case OperationCodeModifyExistingQoSRuleWithoutModifyingPacketFilters:
 		// No packet filter changes needed
 	}
@@ -391,27 +401,38 @@ func GetQosRuleIdFromPccRuleId(pccRuleId string) uint8 {
 	}
 }
 
+// BuildPacketFilterListFromPccRule builds a packet filter for each flow of the rule. A flow whose
+// description cannot be encoded is left out, and said so: the rule then matches less traffic than
+// the PCC rule, where a filter without its address would have matched more.
 func (q *QosRule) BuildPacketFilterListFromPccRule(pccRule *models.PccRule) {
 	pfList := []PacketFilter{}
 
 	// Iterate through
 	for _, flow := range pccRule.FlowInfos {
-		pf := GetPacketFilterFromFlowInfo(&flow)
+		pf, err := GetPacketFilterFromFlowInfo(&flow)
+		if err != nil {
+			logger.QosLog.Errorf("PCC rule [%s]: packet filter [%s] left out of the QoS rule: %v",
+				pccRule.GetPccRuleId(), flow.GetPackFiltId(), err)
+			continue
+		}
 		pfList = append(pfList, pf)
 	}
 	q.PacketFilterList = pfList
 }
 
-func GetPacketFilterFromFlowInfo(flowInfo *models.FlowInformation) PacketFilter {
+// GetPacketFilterFromFlowInfo builds the packet filter of one flow, or fails as SetPfContent does.
+func GetPacketFilterFromFlowInfo(flowInfo *models.FlowInformation) (PacketFilter, error) {
 	pf := &PacketFilter{
 		Identifier: GetPfId(flowInfo.GetPackFiltId()),
 		Direction:  GetPfDirectionFromPccFlowInfo(flowInfo.GetFlowDirection()),
 	}
 
 	// Fill PF component contents
-	pf.GetPfContent(flowInfo.GetFlowDescription())
+	if err := pf.SetPfContent(flowInfo.GetFlowDescription()); err != nil {
+		return PacketFilter{}, err
+	}
 
-	return *pf
+	return *pf, nil
 }
 
 func GetPfId(pfID string) uint8 {
@@ -584,7 +605,19 @@ func (a IPFilterRuleIpAddr) prefix() (netip.Prefix, error) {
 	return prefix, nil
 }
 
+// GetPfContent fills the packet filter from a flow description, as SetPfContent does. A
+// description SetPfContent refuses is logged and leaves the filter as it was.
 func (pf *PacketFilter) GetPfContent(flowDesc string) {
+	if err := pf.SetPfContent(flowDesc); err != nil {
+		logger.QosLog.Errorf("flow description [%s] not encoded: %v", flowDesc, err)
+	}
+}
+
+// SetPfContent fills the packet filter components from a flow description (TS 24.501 subclause
+// 9.11.4.13). It fails, and leaves the filter as it was, when an address of the description cannot
+// be encoded: leaving the address out instead would give the UE a filter matching more than the
+// PCC rule does, all traffic in the worst case.
+func (pf *PacketFilter) SetPfContent(flowDesc string) error {
 	pfcList := []PacketFilterComponent{}
 
 	ipf := DecodeFlowDescToIPFilters(flowDesc)
@@ -600,7 +633,17 @@ func (pf *PacketFilter) GetPfContent(flowDesc string) {
 		pfcList = append(pfcList, *pfc)
 		pf.ContentLength += 1
 		pf.Content = pfcList
-		return
+		return nil
+	}
+
+	// Both addresses first, so that a refused one leaves the filter untouched.
+	remoteAddr, remoteAddrLen, err := buildPFCompAddr(false, ipf.sAddr)
+	if err != nil {
+		return fmt.Errorf("remote address: %w", err)
+	}
+	localAddr, localAddrLen, err := buildPFCompAddr(true, ipf.dAddr)
+	if err != nil {
+		return fmt.Errorf("local address: %w", err)
 	}
 
 	// Protocol identifier/Next header type
@@ -610,9 +653,9 @@ func (pf *PacketFilter) GetPfContent(flowDesc string) {
 	}
 
 	// Remote Addr
-	if pfc, plen := buildPFCompAddr(false, ipf.sAddr); pfc != nil {
-		pfcList = append(pfcList, *pfc)
-		pf.ContentLength += plen
+	if remoteAddr != nil {
+		pfcList = append(pfcList, *remoteAddr)
+		pf.ContentLength += remoteAddrLen
 	}
 
 	// Remote Port
@@ -628,9 +671,9 @@ func (pf *PacketFilter) GetPfContent(flowDesc string) {
 	}
 
 	// Local Addr
-	if pfc, plen := buildPFCompAddr(true, ipf.dAddr); pfc != nil {
-		pfcList = append(pfcList, *pfc)
-		pf.ContentLength += plen
+	if localAddr != nil {
+		pfcList = append(pfcList, *localAddr)
+		pf.ContentLength += localAddrLen
 	}
 
 	// Local Port
@@ -646,56 +689,50 @@ func (pf *PacketFilter) GetPfContent(flowDesc string) {
 	}
 
 	pf.Content = pfcList
+	return nil
 }
 
-func buildPFCompAddr(local bool, val IPFilterRuleIpAddr) (*PacketFilterComponent, uint8) {
-	component := PFComponentTypeIPv4RemoteAddress
+// buildPFCompAddr builds the address component of one side of a flow description, with the
+// length it adds to the packet filter's contents (the type octet and the value).
+//
+//   - IPv4: IPv4 remote (0x10) or local (0x11) address, 4 octets of address and 4 of mask.
+//   - IPv6: IPv6 remote (0x21) or local (0x23) address/prefix length, 16 octets of address and 1 of
+//     prefix length (TS 24.501 Table 9.11.4.13.1). The 0x22 form, which it deprecates, is not used.
+//
+// The keywords "any" and "assigned" build no component: "any" matches every address, and the
+// address assigned to the UE is the one the filter is applied to anyway. Anything else that is not
+// an address of either family is an error, not a missing component.
+func buildPFCompAddr(local bool, val IPFilterRuleIpAddr) (*PacketFilterComponent, uint8, error) {
+	if val.isKeyword() {
+		return nil, 0, nil
+	}
 
+	prefix, err := val.prefix()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if prefix.Addr().Is4() {
+		component := PFComponentTypeIPv4RemoteAddress
+		if local {
+			component = PFComponentTypeIPv4LocalAddress
+		}
+		addr := prefix.Addr().As4()
+		value := make([]byte, 0, 8)
+		value = append(value, addr[:]...)
+		value = append(value, net.CIDRMask(prefix.Bits(), 32)...)
+		return &PacketFilterComponent{ComponentType: component, ComponentValue: value}, 9, nil
+	}
+
+	component := PFComponentTypeIPv6RemoteAddress
 	if local {
-		component = PFComponentTypeIPv4LocalAddress
-		// if local address value- "assigned" then don't need to set it
-		if val.addr == "assigned" {
-			return nil, 0
-		}
-	} else {
-		// if remote address value- "any" then don't need to set it
-		if val.addr == "any" {
-			return nil, 0
-		}
+		component = PFComponentTypeIPv6LocalAddress
 	}
-
-	pfc := &PacketFilterComponent{
-		ComponentType:  component,
-		ComponentValue: make([]byte, 0),
-	}
-
-	var addr, mask []byte
-
-	if ipAddr := net.ParseIP(val.addr); ipAddr == nil {
-		return nil, 0
-	} else {
-		// check if it is valid v4 addr
-		if v4addr := ipAddr.To4(); v4addr == nil {
-			return nil, 0
-		} else {
-			addr = []byte(v4addr)
-			pfc.ComponentValue = append(pfc.ComponentValue, addr...)
-		}
-	}
-
-	if val.mask != "" {
-		maskInt, err := strconv.Atoi(val.mask)
-		if err != nil {
-			logger.QosLog.Errorf("error converting mask to int: %s", err)
-		}
-		mask = net.CIDRMask(maskInt, 32)
-		pfc.ComponentValue = append(pfc.ComponentValue, mask...)
-	} else {
-		mask = net.CIDRMask(32, 32)
-		pfc.ComponentValue = append(pfc.ComponentValue, mask...)
-	}
-
-	return pfc, 9
+	addr := prefix.Addr().As16()
+	value := make([]byte, 0, 17)
+	value = append(value, addr[:]...)
+	value = append(value, uint8(prefix.Bits()))
+	return &PacketFilterComponent{ComponentType: component, ComponentValue: value}, 18, nil
 }
 
 func buildPFCompPort(local bool, val string) (*PacketFilterComponent, uint8) {
