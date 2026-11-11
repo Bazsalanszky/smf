@@ -173,7 +173,10 @@ func farToCreateFAR(far *context.FAR) *ie.IE {
 	applyActionflag.setBit(3, far.ApplyAction.Buff)
 	applyActionflag.setBit(4, far.ApplyAction.Nocp)
 	applyActionflag.setBit(5, far.ApplyAction.Dupl)
-	createFARies = append(createFARies, ie.NewApplyAction(uint8(*applyActionflag)))
+	// Apply Action is two octets since Rel-16 (TS 29.244 clause 8.2.26): the second carries
+	// EDRT, BDPN and DDPN (and later flags), none of which the SMF sets. A UPF that parses the IE
+	// at that length rejects a one-octet Apply Action, and the whole request with it.
+	createFARies = append(createFARies, ie.NewApplyAction(uint8(*applyActionflag), 0))
 	if far.BAR != nil {
 		createFARies = append(createFARies, ie.NewBARID(far.BAR.BARID))
 	}
@@ -250,7 +253,7 @@ func farToUpdateFAR(far *context.FAR) *ie.IE {
 	applyActionflag.setBit(3, far.ApplyAction.Buff)
 	applyActionflag.setBit(4, far.ApplyAction.Nocp)
 	applyActionflag.setBit(5, far.ApplyAction.Dupl)
-	updateFARies = append(updateFARies, ie.NewApplyAction(uint8(*applyActionflag)))
+	updateFARies = append(updateFARies, ie.NewApplyAction(uint8(*applyActionflag), 0)) // as in farToCreateFAR
 
 	if far.ForwardingParameters != nil {
 		forwardingParametersIEs := make([]*ie.IE, 0)
