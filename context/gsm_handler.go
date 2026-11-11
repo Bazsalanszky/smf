@@ -20,27 +20,23 @@ func (smContext *SMContext) HandlePDUSessionEstablishmentRequest(req *nasMessage
 	// Retrieve PTI (Procedure transaction identity)
 	smContext.Pti = req.GetPTI()
 
-	// Handle PDUSessionType
+	// Handle PDUSessionType: select it from the request, the subscription and the DNN's pools.
+	// The UE's addresses are allocated afterwards, for the families the selected type carries.
+	var requested uint8
 	if req.PDUSessionType != nil {
-		requestedPDUSessionType := req.GetPDUSessionTypeValue()
-		if err := smContext.isAllowedPDUSessionType(requestedPDUSessionType); err != nil {
-			smContext.SubCtxLog.Errorf("%s", err)
-			return err
-		}
-	} else {
-		// Set to default supported PDU Session Type
-		switch SMF_Self().SupportedPDUSessionType {
-		case "IPv4":
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeIPv4
-		case "IPv6":
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeIPv6
-		case "IPv4v6":
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeIPv4IPv6
-		case "Ethernet":
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeEthernet
-		default:
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeIPv4
-		}
+		requested = req.GetPDUSessionTypeValue()
+	}
+	selection := SelectPDUSessionType(requested, req.PDUSessionType != nil,
+		smContext.DnnConfiguration.PduSessionTypes, smContext.DNNInfo.HasIpv4Pool(), smContext.DNNInfo.HasIpv6Pool())
+	smContext.SelectedPDUSessionType = selection.Type
+	smContext.EstAcceptCause5gSMValue = selection.AcceptCause
+	if selection.Refusal != NotRefused {
+		err := &PDUSessionTypeError{Refusal: selection.Refusal, Reason: selection.Reason}
+		smContext.SubCtxLog.Errorf("%s", err)
+		return err
+	}
+	if selection.Reason != "" {
+		smContext.SubCtxLog.Infof("PDU session type %d selected: %s", selection.Type, selection.Reason)
 	}
 
 	if smContext.SelectedPDUSessionType == 0 {

@@ -26,15 +26,15 @@ func storableContext(ref string, addr *UeIpAddr, dnnInfo *SnssaiSmfDnnInfo) *SMC
 		Ref:        ref,
 		Supi:       testSupi,
 		Identifier: testSupi,
-		Dnn:        "internet",
+		Dnn:        "ipv6-store-dnn",
 		AnType:     models.ACCESSTYPE__3_GPP_ACCESS,
 		PDUAddress: addr,
 		DNNInfo:    dnnInfo,
 		AMFProfile: models.NFProfileDiscovery{
-			NfInstanceId: "amf-instance-1", NfType: models.NFTYPE_AMF, NfStatus: models.NFSTATUS_REGISTERED,
+			NfInstanceId: "amf-instance-v6", NfType: models.NFTYPE_AMF, NfStatus: models.NFSTATUS_REGISTERED,
 		},
 		SelectedPCFProfile: models.NFProfileDiscovery{
-			NfInstanceId: "pcf-instance-1", NfType: models.NFTYPE_PCF, NfStatus: models.NFSTATUS_REGISTERED,
+			NfInstanceId: "pcf-instance-v6", NfType: models.NFTYPE_PCF, NfStatus: models.NFSTATUS_REGISTERED,
 		},
 		DnnConfiguration: models.DnnConfiguration{
 			SscModes: models.SscModes{DefaultSscMode: models.SSCMODE_SSC_MODE_1},
@@ -142,8 +142,8 @@ func TestIPv6SessionsSurviveTheDatastore(t *testing.T) {
 		name string
 		addr *UeIpAddr
 	}{
-		{name: "IPv6", addr: &UeIpAddr{Ipv6Prefix: &prefix, Ipv6Iid: &testIid}},
-		{name: "IPv4v6", addr: &UeIpAddr{Ip: net.ParseIP("172.250.0.7").To4(), Ipv6Prefix: &prefix, Ipv6Iid: &testIid}},
+		{name: nameIPv6, addr: &UeIpAddr{Ipv6Prefix: &prefix, Ipv6Iid: &testIid}},
+		{name: nameIPv4v6, addr: &UeIpAddr{Ip: net.ParseIP("172.250.0.7").To4(), Ipv6Prefix: &prefix, Ipv6Iid: &testIid}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v6Allocator, err := NewIpv6PrefixAllocator("2001:db8:500::/56", 64)
@@ -181,9 +181,17 @@ func TestIPv6SessionsSurviveTheDatastore(t *testing.T) {
 			if !decoded.ProtocolConfigurationOptions.PCSCFIPv6Request {
 				t.Errorf("the P-CSCF IPv6 request was not restored")
 			}
-			// The restored allocator has no pool, as the IPv4 one has none.
+			// The restored allocator has no pool, as the IPv4 one has none: releasing on it is
+			// skipped, not a panic, and the session's own addresses are cleared.
 			if decoded.DNNInfo.UeIpv6Allocator == nil || decoded.DNNInfo.HasIpv6Pool() {
 				t.Errorf("restored IPv6 allocator = %+v, want one with no pool", decoded.DNNInfo.UeIpv6Allocator)
+			}
+			decoded.initLogTags()
+			if err := decoded.ReleaseUeIpAddr(); err != nil {
+				t.Errorf("ReleaseUeIpAddr: %v", err)
+			}
+			if decoded.PDUAddress.HasIpv6() || decoded.PDUAddress.HasIpv4() {
+				t.Errorf("after release the session holds %+v", decoded.PDUAddress)
 			}
 		})
 	}
