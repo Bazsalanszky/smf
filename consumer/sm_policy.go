@@ -56,6 +56,10 @@ func SendSMPolicyAssociationCreate(smContext *smf_context.SMContext) (*models.Sm
 	if smContext.DnnConfiguration.HasVar5gQosProfile() {
 		smPolicyData.SetSubsDefQos(smContext.DnnConfiguration.GetVar5gQosProfile())
 	}
+	// The UE's IPv6 prefix, for a session with IPv6 (TS 29.512 clause 5.6.2.2, ipv6AddressPrefix).
+	if smContext.PDUAddress.HasIpv6() {
+		smPolicyData.SetIpv6AddressPrefix(smContext.PDUAddress.Ipv6Prefix.String())
+	}
 	smPolicyData.SetSliceInfo(*smContext.Snssai)
 	smPolicyData.SetServingNetwork(plmnIdNid)
 	smPolicyData.SetSuppFeat("F")

@@ -68,4 +68,6 @@ require (
 
 replace github.com/omec-project/util => github.com/Bazsalanszky/util v1.9.4-0.20261110170822-c04029c861b8
 
-replace github.com/omec-project/openapi/v2 => github.com/Bazsalanszky/openapi/v2 v2.4.2-0.20261110165928-4af8c8483548
+replace github.com/omec-project/nas/v2 => github.com/Bazsalanszky/nas/v2 v2.2.8-0.20261111093723-e5839b582d54
+
+replace github.com/omec-project/openapi/v2 => github.com/Bazsalanszky/openapi/v2 v2.4.2-0.20261111092608-bc803c98b0b9

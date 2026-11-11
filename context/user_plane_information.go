@@ -481,10 +481,26 @@ func convertIpDomainsToDnnList(ipDomains []nfConfigApi.IpDomain) []DnnUPFInfoIte
 		dnnList = append(dnnList, DnnUPFInfoItem{
 			Dnn:             domain.DnnName,
 			DnaiList:        []string{""},
-			PduSessionTypes: []models.PduSessionType{models.PDUSESSIONTYPE_IPV4},
+			PduSessionTypes: dnnPduSessionTypes(&domain),
 		})
 	}
 	return dnnList
+}
+
+// dnnPduSessionTypes is the PDU session types a DNN's IP domain serves: IPv4 for a domain without
+// an IPv6 pool, as for every domain before; IPv6 for one with only an IPv6 pool; and IPv4, IPv6
+// and IPv4v6 for one with both.
+func dnnPduSessionTypes(domain *nfConfigApi.IpDomain) []models.PduSessionType {
+	switch {
+	case domain.GetUeSubnetIpv6() == "":
+		return []models.PduSessionType{models.PDUSESSIONTYPE_IPV4}
+	case domain.GetUeSubnet() == "":
+		return []models.PduSessionType{models.PDUSESSIONTYPE_IPV6}
+	default:
+		return []models.PduSessionType{
+			models.PDUSESSIONTYPE_IPV4, models.PDUSESSIONTYPE_IPV6, models.PDUSESSIONTYPE_IPV4_V6,
+		}
+	}
 }
 
 func appendIfMissingDNNItems(existingDnnList, newDnnList []DnnUPFInfoItem) []DnnUPFInfoItem {

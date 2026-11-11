@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/omec-project/nas/v2/nasMessage"
 	"github.com/omec-project/ngap/v2/aper"
 	"github.com/omec-project/ngap/v2/ngapType"
 	"github.com/omec-project/openapi/v2/models"
@@ -156,7 +157,7 @@ func BuildPDUSessionResourceSetupRequestTransfer(ctx *SMContext) ([]byte, error)
 	ie.Value = ngapType.PDUSessionResourceSetupRequestTransferIEsValue{
 		Present: ngapType.PDUSessionResourceSetupRequestTransferIEsPresentPDUSessionType,
 		PDUSessionType: &ngapType.PDUSessionType{
-			Value: ngapType.PDUSessionTypePresentIpv4,
+			Value: ngapPDUSessionType(ctx.SelectedPDUSessionType),
 		},
 	}
 	resourceSetupRequestTransfer.ProtocolIEs.List = append(resourceSetupRequestTransfer.ProtocolIEs.List, ie)
@@ -1001,4 +1002,18 @@ func policyUpdateDeletesFlows(ctx *SMContext) bool {
 	}
 
 	return len(update.QosFlowUpdate.GetDeleted()) > 0
+}
+
+// ngapPDUSessionType is the NGAP PDU Session Type (TS 38.413 clause 9.3.1.52) of a NAS PDU session
+// type. A session the SMF serves is IPv4, IPv6 or IPv4v6 (SelectPDUSessionType); anything else is
+// sent as IPv4, the value every session was sent with before.
+func ngapPDUSessionType(nasPDUSessionType uint8) aper.Enumerated {
+	switch nasPDUSessionType {
+	case nasMessage.PDUSessionTypeIPv6:
+		return ngapType.PDUSessionTypePresentIpv6
+	case nasMessage.PDUSessionTypeIPv4IPv6:
+		return ngapType.PDUSessionTypePresentIpv4v6
+	default:
+		return ngapType.PDUSessionTypePresentIpv4
+	}
 }

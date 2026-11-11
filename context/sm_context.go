@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +29,6 @@ import (
 	"github.com/omec-project/smf/logger"
 	"github.com/omec-project/smf/metrics"
 	"github.com/omec-project/smf/msgtypes/svcmsgtypes"
-	"github.com/omec-project/smf/nasconv"
 	"github.com/omec-project/smf/qos"
 	errors "github.com/omec-project/smf/smferrors"
 	"github.com/omec-project/smf/transaction"
@@ -84,10 +84,66 @@ func decSMContextActive() uint64 {
 	return atomic.AddUint64(&smContextActive, ^uint64(0))
 }
 
+// UeIpAddr is the UE's address in each family. It is persisted with the session (PDUAddress).
+//
+// Ip is the IPv4 address, and stays that: a session without IPv4 leaves it nil. The IPv6 fields
+// were added beside it rather than replacing it, so that a document written before them reads back
+// unchanged, and they are omitted when empty, so that an IPv4 session's document is written exactly
+// as before. Their stored forms (keys as the field names, like Ip's):
+//   - Ipv6Prefix: the prefix the session holds, in CIDR text ("2001:db8:500:7::/64");
+//   - Ipv6Iid: the interface identifier the UE was given, as InterfaceIdentifier's text
+//     ("0123:4567:89ab:cdef").
+//
+// A static prefix needs no flag of its own: releasing a prefix returns it to the DNN's pool when it
+// is one of the pool's, which a static prefix from the subscription is only if it was claimed from
+// it, and is a no-op otherwise.
 type UeIpAddr struct {
 	Ip          net.IP
 	UpfProvided bool
 	Static      bool // Ip was allocated from staticIpInfo; ask HasStaticUeIpAddr, which UpfProvided overrides
+
+	// Ipv6Prefix is the IPv6 prefix allocated to the session (TS 23.501 clause 5.8.2.2.1), nil for
+	// a session without IPv6. The UPF matches the session's IPv6 traffic on it, and the router
+	// advertisement announces it.
+	Ipv6Prefix *netip.Prefix `json:"Ipv6Prefix,omitempty" yaml:"ipv6Prefix,omitempty" bson:"Ipv6Prefix,omitempty"`
+	// Ipv6Iid is the interface identifier sent to the UE in the PDU address (TS 24.501 clause
+	// 9.11.4.10), set together with Ipv6Prefix.
+	Ipv6Iid *InterfaceIdentifier `json:"Ipv6Iid,omitempty" yaml:"ipv6Iid,omitempty" bson:"Ipv6Iid,omitempty"`
+}
+
+// HasIpv4 reports whether the session holds an IPv4 address: one is set and it is not the 0.0.0.0
+// ReleaseUeIpAddr leaves.
+func (a *UeIpAddr) HasIpv4() bool {
+	return a != nil && a.Ip.To4() != nil && !a.Ip.IsUnspecified()
+}
+
+// HasIpv6 reports whether the session holds an IPv6 prefix and interface identifier.
+func (a *UeIpAddr) HasIpv6() bool {
+	return a != nil && a.Ipv6Prefix != nil && a.Ipv6Prefix.IsValid() && a.Ipv6Iid != nil
+}
+
+// Ipv6Addr is the UE's IPv6 address: its prefix with the interface identifier it was given, the
+// address it builds once the router advertisement gives it the prefix. The zero Addr when the
+// session holds no IPv6.
+func (a *UeIpAddr) Ipv6Addr() netip.Addr {
+	if !a.HasIpv6() {
+		return netip.Addr{}
+	}
+	return Ipv6Address(*a.Ipv6Prefix, *a.Ipv6Iid)
+}
+
+// ReportedAddress is the address the SMF reports the session by, in the session metrics, the Kafka
+// export and the OAM session information: the IPv4 address as before for a session with one, also
+// the 0.0.0.0 its release leaves, else the IPv6 address (Ipv6Addr), else "<nil>" as before. Each
+// of those carries one address, so an IPv4v6 session is reported by its IPv4 address.
+func (a *UeIpAddr) ReportedAddress() string {
+	if a != nil && a.Ip == nil && a.HasIpv6() {
+		return a.Ipv6Addr().String()
+	}
+	if a == nil {
+		return net.IP(nil).String()
+	}
+	return a.Ip.String()
 }
 
 type SMContext struct {
@@ -651,7 +707,7 @@ func (smContext *SMContext) ChangeState(nextState SMContextState) {
 				smContext.SubCtxLog.Debug("context state change, enterprise info not available")
 			}
 
-			smContext.activeIP = smContext.PDUAddress.Ip.String()
+			smContext.activeIP = smContext.PDUAddress.ReportedAddress()
 			smContext.activeUpf = upf
 			smContext.activeEnterprise = ent
 			metrics.SetSessProfileStats(smContext.Identifier, smContext.activeIP, nextState.String(),
@@ -992,7 +1048,10 @@ func (smContext *SMContext) HasStaticUeIpAddr() bool {
 	return smContext.PDUAddress.Static
 }
 
-func (smContext *SMContext) ReleaseUeIpAddr() error {
+// ReleaseUeIpv4Addr returns the session's IPv4 address to the DNN's pool, unless the user plane
+// supplied it, and leaves 0.0.0.0 in its place. It is ReleaseUeIpAddr's IPv4 half, and what replacing
+// the SMF's address with one the user plane allocated releases: that replaces only the IPv4 address.
+func (smContext *SMContext) ReleaseUeIpv4Addr() error {
 	if smContext.PDUAddress == nil {
 		logger.CtxLog.Warnf("ReleaseUeIpAddr: PduSessionUeAddress is nil, skipping release")
 		return nil
@@ -1078,16 +1137,33 @@ func (smContext *SMContext) BuildCreatedData() (createdData *models.SmContextCre
 	return
 }
 
+// PDUAddressToNAS encodes the PDU address information of the PDU address IE (TS 24.501 clause
+// 9.11.4.10) and the IE's length, which counts the PDU session type octet before it:
+//   - IPv4: the IPv4 address, length 5;
+//   - IPv6: the 8-octet interface identifier, length 9;
+//   - IPv4v6: the interface identifier followed by the IPv4 address, length 13.
+//
+// The UE builds its link-local address from the interface identifier, and its global address from
+// the identifier and the prefix the router advertisement announces (TS 23.501 clause 5.8.2.2.2).
+// A family the session does not hold is encoded as zeros.
 func (smContext *SMContext) PDUAddressToNAS() (addr [12]byte, addrLen uint8) {
-	copy(addr[:], smContext.PDUAddress.Ip)
+	var iid InterfaceIdentifier
+	if smContext.PDUAddress.Ipv6Iid != nil {
+		iid = *smContext.PDUAddress.Ipv6Iid
+	}
 	switch smContext.SelectedPDUSessionType {
 	case nasMessage.PDUSessionTypeIPv4:
+		copy(addr[:4], smContext.PDUAddress.Ip.To4())
 		addrLen = 4 + 1
 	case nasMessage.PDUSessionTypeIPv6:
+		copy(addr[:8], iid[:])
+		addrLen = 8 + 1
 	case nasMessage.PDUSessionTypeIPv4IPv6:
+		copy(addr[:8], iid[:])
+		copy(addr[8:], smContext.PDUAddress.Ip.To4())
 		addrLen = 12 + 1
 	}
-	return
+	return addr, addrLen
 }
 
 // PCFSelection will select PCF for this SM Context
@@ -1310,91 +1386,6 @@ func (smContext *SMContext) QueuePFCPVerdict(verdict PFCPSessionResponseStatus) 
 	}
 }
 
-func (smContext *SMContext) isAllowedPDUSessionType(requestedPDUSessionType uint8) error {
-	dnnPDUSessionType := smContext.DnnConfiguration.PduSessionTypes
-	if !dnnPDUSessionType.HasDefaultSessionType() {
-		return fmt.Errorf("this SMContext[%s] has no subscription pdu session type info", smContext.Ref)
-	}
-
-	allowIPv4 := false
-	allowIPv6 := false
-	allowEthernet := false
-
-	for _, allowedPDUSessionType := range smContext.DnnConfiguration.PduSessionTypes.AllowedSessionTypes {
-		switch allowedPDUSessionType {
-		case models.PDUSESSIONTYPE_IPV4:
-			allowIPv4 = true
-		case models.PDUSESSIONTYPE_IPV6:
-			allowIPv6 = true
-		case models.PDUSESSIONTYPE_IPV4_V6:
-			allowIPv4 = true
-			allowIPv6 = true
-		case models.PDUSESSIONTYPE_ETHERNET:
-			allowEthernet = true
-		}
-	}
-
-	supportedPDUSessionType := SMF_Self().SupportedPDUSessionType
-	switch supportedPDUSessionType {
-	case "IPv4":
-		if !allowIPv4 {
-			return fmt.Errorf("no SupportedPDUSessionType[%q] in DNN[%s] configuration", supportedPDUSessionType, smContext.Dnn)
-		}
-	case "IPv6":
-		if !allowIPv6 {
-			return fmt.Errorf("no SupportedPDUSessionType[%q] in DNN[%s] configuration", supportedPDUSessionType, smContext.Dnn)
-		}
-	case "IPv4v6":
-		if !allowIPv4 && !allowIPv6 {
-			return fmt.Errorf("no SupportedPDUSessionType[%q] in DNN[%s] configuration", supportedPDUSessionType, smContext.Dnn)
-		}
-	case "Ethernet":
-		if !allowEthernet {
-			return fmt.Errorf("no SupportedPDUSessionType[%q] in DNN[%s] configuration", supportedPDUSessionType, smContext.Dnn)
-		}
-	}
-
-	smContext.EstAcceptCause5gSMValue = 0
-	switch nasconv.PDUSessionTypeToModels(requestedPDUSessionType) {
-	case models.PDUSESSIONTYPE_IPV4:
-		if allowIPv4 {
-			smContext.SelectedPDUSessionType = nasconv.ModelsToPDUSessionType(models.PDUSESSIONTYPE_IPV4)
-		} else {
-			return fmt.Errorf("PduSessionType_IPV4 is not allowed in DNN[%s] configuration", smContext.Dnn)
-		}
-	case models.PDUSESSIONTYPE_IPV6:
-		if allowIPv6 {
-			smContext.SelectedPDUSessionType = nasconv.ModelsToPDUSessionType(models.PDUSESSIONTYPE_IPV6)
-		} else {
-			return fmt.Errorf("PduSessionType_IPV6 is not allowed in DNN[%s] configuration", smContext.Dnn)
-		}
-	case models.PDUSESSIONTYPE_IPV4_V6:
-		if allowIPv4 && allowIPv6 {
-			smContext.SelectedPDUSessionType = nasconv.ModelsToPDUSessionType(models.PDUSESSIONTYPE_IPV4_V6)
-		} else if allowIPv4 {
-			smContext.SelectedPDUSessionType = nasconv.ModelsToPDUSessionType(models.PDUSESSIONTYPE_IPV4)
-			smContext.EstAcceptCause5gSMValue = nasMessage.Cause5GSMPDUSessionTypeIPv4OnlyAllowed
-		} else if allowIPv6 {
-			smContext.SelectedPDUSessionType = nasconv.ModelsToPDUSessionType(models.PDUSESSIONTYPE_IPV6)
-			smContext.EstAcceptCause5gSMValue = nasMessage.Cause5GSMPDUSessionTypeIPv6OnlyAllowed
-		} else {
-			return fmt.Errorf("PduSessionType_IPV4_V6 is not allowed in DNN[%s] configuration", smContext.Dnn)
-		}
-	case models.PDUSESSIONTYPE_ETHERNET:
-		if allowEthernet {
-			smContext.SelectedPDUSessionType = nasconv.ModelsToPDUSessionType(models.PDUSESSIONTYPE_ETHERNET)
-		} else {
-			return fmt.Errorf("PduSessionType_ETHERNET is not allowed in DNN[%s] configuration", smContext.Dnn)
-		}
-	case models.PDUSESSIONTYPE_UNSTRUCTURED:
-		smContext.SelectedPDUSessionType = nasconv.ModelsToPDUSessionType(models.PDUSESSIONTYPE_UNSTRUCTURED)
-		return fmt.Errorf("unstructured PDU Session type")
-	default:
-		return fmt.Errorf("requested PDU Sesstion type[%d] is not supported", requestedPDUSessionType)
-	}
-	return nil
-}
-
 // SM Policy related operation
 
 // SelectedSessionRule - return the SMF selected session rule for this SM Context
@@ -1580,8 +1571,8 @@ func (smContext *SMContext) PublishSmCtxtInfo() {
 
 	// Populate kafka sm ctxt struct
 	kafkaSmCtxt.Imsi = smContext.Supi
-	if smContext.PDUAddress != nil && smContext.PDUAddress.Ip != nil {
-		kafkaSmCtxt.IPAddress = smContext.PDUAddress.Ip.String()
+	if addr := smContext.PDUAddress; addr != nil && (addr.Ip != nil || addr.HasIpv6()) {
+		kafkaSmCtxt.IPAddress = addr.ReportedAddress()
 	}
 	kafkaSmCtxt.SmfSubState, op = mapPduSessStateToMetricStateAndOp(smContext.SMContextState)
 	if op == mi.SubsOpDel && smContext.SupersededByAnother() {

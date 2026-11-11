@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/omec-project/nas/v2/nasMessage"
 	"github.com/omec-project/smf/context"
 	"github.com/wmnsk/go-pfcp/ie"
 	"github.com/wmnsk/go-pfcp/message"
@@ -131,13 +132,14 @@ func createPDIIE(pdi *context.PDI) *ie.IE {
 		ueIPAddressflags.setBit(4, pdi.UEIPAddress.Ipv6d)
 		ueIPAddressflags.setBit(5, pdi.UEIPAddress.CHV4)
 		ueIPAddressflags.setBit(6, pdi.UEIPAddress.CHV6)
+		ueIPAddressflags.setBit(7, pdi.UEIPAddress.IP6PL)
 		createPDIIes = append(createPDIIes,
 			ie.NewUEIPAddress(
 				uint8(*ueIPAddressflags),
 				pdi.UEIPAddress.Ipv4Address.String(),
 				pdi.UEIPAddress.Ipv6Address.String(),
 				pdi.UEIPAddress.Ipv6PrefixDelegationBits,
-				0,
+				pdi.UEIPAddress.Ipv6PrefixLength,
 			),
 		)
 	}
@@ -329,10 +331,41 @@ func NewCPFSEID(seid uint64, addrs ...net.IP) *ie.IE {
 	return ie.NewFSEID(seid, v4, v6)
 }
 
-// BuildPfcpSessionEstablishmentRequest builds the request. fseidAddr and moreFSEIDAddrs are
-// the SMF's N4 addresses for the CP F-SEID, placed by family (see NewCPFSEID): one address
-// for a single-stack SMF, one per family for a dual-stack one.
+// PDNType is the PFCP PDN Type (TS 29.244 clause 8.2.79) of a session of a NAS PDU session type:
+// IPv4, IPv6 or IPv4v6. Any other value, which the SMF does not establish, is IPv4, the PDN Type
+// every session was sent with before the SMF served IPv6.
+func PDNType(pduSessionType uint8) uint8 {
+	switch pduSessionType {
+	case nasMessage.PDUSessionTypeIPv6:
+		return ie.PDNTypeIPv6
+	case nasMessage.PDUSessionTypeIPv4IPv6:
+		return ie.PDNTypeIPv4v6
+	default:
+		return ie.PDNTypeIPv4
+	}
+}
+
+// BuildPfcpSessionEstablishmentRequest builds the request of an IPv4 session. fseidAddr and
+// moreFSEIDAddrs are the SMF's N4 addresses for the CP F-SEID, placed by family (see
+// NewCPFSEID): one address for a single-stack SMF, one per family for a dual-stack one.
 func BuildPfcpSessionEstablishmentRequest(
+	sequenceNumber uint32,
+	nodeID string,
+	fseidAddr net.IP,
+	localSeid uint64,
+	pdrList []*context.PDR,
+	farList []*context.FAR,
+	qerList []*context.QER,
+	moreFSEIDAddrs ...net.IP,
+) (*message.SessionEstablishmentRequest, error) {
+	return BuildPfcpSessionEstablishmentRequestOfPDNType(ie.PDNTypeIPv4, sequenceNumber, nodeID, fseidAddr,
+		localSeid, pdrList, farList, qerList, moreFSEIDAddrs...)
+}
+
+// BuildPfcpSessionEstablishmentRequestOfPDNType builds the request of a session of the given PDN
+// Type (see PDNType); the rest is as for BuildPfcpSessionEstablishmentRequest.
+func BuildPfcpSessionEstablishmentRequestOfPDNType(
+	pdnType uint8,
 	sequenceNumber uint32,
 	nodeID string,
 	fseidAddr net.IP,
@@ -375,7 +408,7 @@ func BuildPfcpSessionEstablishmentRequest(
 		filteredQER.State = context.RULE_CREATE
 	}
 
-	ies = append(ies, ie.NewPDNType(ie.PDNTypeIPv4))
+	ies = append(ies, ie.NewPDNType(pdnType))
 
 	return message.NewSessionEstablishmentRequest(
 		1,

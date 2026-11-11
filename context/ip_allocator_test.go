@@ -195,3 +195,19 @@ func TestIPAllocatorWithNoPool(t *testing.T) {
 		})
 	}
 }
+
+// An IPv6 ueSubnet used to panic computing the pool size, 1<<(32-mask). It is refused instead: an
+// IPv6 pool is ueSubnetIpv6's (Ipv6PrefixAllocator). IPv4 subnets build as before.
+func TestNewIPAllocatorRefusesIPv6Subnets(t *testing.T) {
+	for _, cidr := range []string{"2001:db8:500::/56", "2001:db8::/64", "2001:db8::/16", "::/0"} {
+		allocator, err := smf_context.NewIPAllocator(cidr)
+		if err == nil {
+			t.Errorf("NewIPAllocator(%q) = %+v, want an error", cidr, allocator)
+		}
+	}
+	for _, cidr := range []string{"192.168.1.0/24", "10.0.0.0/8", "172.250.0.0/16"} {
+		if _, err := smf_context.NewIPAllocator(cidr); err != nil {
+			t.Errorf("NewIPAllocator(%q): %v", cidr, err)
+		}
+	}
+}

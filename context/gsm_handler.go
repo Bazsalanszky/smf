@@ -20,27 +20,23 @@ func (smContext *SMContext) HandlePDUSessionEstablishmentRequest(req *nasMessage
 	// Retrieve PTI (Procedure transaction identity)
 	smContext.Pti = req.GetPTI()
 
-	// Handle PDUSessionType
+	// Handle PDUSessionType: select it from the request, the subscription and the DNN's pools.
+	// The UE's addresses are allocated afterwards, for the families the selected type carries.
+	var requested uint8
 	if req.PDUSessionType != nil {
-		requestedPDUSessionType := req.GetPDUSessionTypeValue()
-		if err := smContext.isAllowedPDUSessionType(requestedPDUSessionType); err != nil {
-			smContext.SubCtxLog.Errorf("%s", err)
-			return err
-		}
-	} else {
-		// Set to default supported PDU Session Type
-		switch SMF_Self().SupportedPDUSessionType {
-		case "IPv4":
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeIPv4
-		case "IPv6":
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeIPv6
-		case "IPv4v6":
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeIPv4IPv6
-		case "Ethernet":
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeEthernet
-		default:
-			smContext.SelectedPDUSessionType = nasMessage.PDUSessionTypeIPv4
-		}
+		requested = req.GetPDUSessionTypeValue()
+	}
+	selection := SelectPDUSessionType(requested, req.PDUSessionType != nil,
+		smContext.DnnConfiguration.PduSessionTypes, smContext.DNNInfo.HasIpv4Pool(), smContext.DNNInfo.HasIpv6Pool())
+	smContext.SelectedPDUSessionType = selection.Type
+	smContext.EstAcceptCause5gSMValue = selection.AcceptCause
+	if selection.Refusal != NotRefused {
+		err := &PDUSessionTypeError{Refusal: selection.Refusal, Reason: selection.Reason}
+		smContext.SubCtxLog.Errorf("%s", err)
+		return err
+	}
+	if selection.Reason != "" {
+		smContext.SubCtxLog.Infof("PDU session type %d selected: %s", selection.Type, selection.Reason)
 	}
 
 	if smContext.SelectedPDUSessionType == 0 {
@@ -68,7 +64,14 @@ func (smContext *SMContext) HandlePDUSessionEstablishmentRequest(req *nasMessage
 			smContext.SubGsmLog.Debugln("Container Length:", container.LengthOfContents)
 			switch container.ProtocolOrContainerID {
 			case nasMessage.PCSCFIPv6AddressRequestUL:
-				smContext.SubGsmLog.Infoln("Didn't Implement container type PCSCFIPv6AddressRequestUL")
+				// Answered for a session with IPv6 only, and recorded only for one, so that an
+				// IPv4 session is stored as before.
+				if SessionHasIpv6(smContext.SelectedPDUSessionType) {
+					smContext.ProtocolConfigurationOptions.PCSCFIPv6Request = true
+					smContext.SubGsmLog.Infoln("PCSCFIPv6AddressRequestUL has been set true")
+				} else {
+					smContext.SubGsmLog.Infoln("PCSCFIPv6AddressRequestUL ignored: the session has no IPv6")
+				}
 			case nasMessage.IMCNSubsystemSignalingFlagUL:
 				smContext.SubGsmLog.Infoln("Didn't Implement container type IMCNSubsystemSignalingFlagUL")
 			case nasMessage.DNSServerIPv6AddressRequestUL:
