@@ -46,6 +46,9 @@ type DataPathNodeInDB struct {
 
 	DataPathNodeUPFNodeID NodeIDInDB
 	IsBranchingPoint      bool
+	// RouterAdvertisement is the node's router advertisement rules, absent for a node without them
+	// (every node of an IPv4 session), so such a node is stored as before.
+	RouterAdvertisement *RouterAdvertisementRules `json:"RouterAdvertisement,omitempty" bson:"RouterAdvertisement,omitempty"`
 }
 type TunnelInfo struct {
 	PDR                   map[string]*PDR
@@ -130,6 +133,8 @@ func RecoverFirstDPNode(nodeIDInDB NodeIDInDB) (dataPathNode *DataPathNode) {
 	if nodeInDB.DLTunnelInfo != nilVal {
 		dataPathNode.DownLinkTunnel = RecoverTunnel(nodeInDB.DLTunnelInfo)
 	}
+	dataPathNode.RouterAdvertisement = nodeInDB.RouterAdvertisement
+	dataPathNode.relinkRouterAdvertisementFAR()
 	logger.CtxLog.Infoln("RecoverFirstDPNode - dataPathNode", dataPathNode)
 	if nodeInDB.ULTunnelInfo != nilVal {
 		logger.CtxLog.Infoln("nodeInDB.ULTunnelInfo != nilVal")
@@ -215,6 +220,8 @@ func RecoverDataPathNode(dataPathNodeInDB *DataPathNodeInDB) (dataPathNode *Data
 
 		dataPathNode.UpLinkTunnel = upLinkTunnel
 		dataPathNode.DownLinkTunnel = downLinkTunnel
+		dataPathNode.RouterAdvertisement = dataPathNodeInDB.RouterAdvertisement
+		dataPathNode.relinkRouterAdvertisementFAR()
 
 		return dataPathNode
 	}
@@ -229,6 +236,7 @@ func StoreDataPathNode(dataPathNode *DataPathNode) (dataPathNodeInDB *DataPathNo
 		dataPathNodeInDB := &DataPathNodeInDB{
 			DataPathNodeUPFNodeID: GetNodeIDInDB(dataPathNode.UPF.NodeID),
 			IsBranchingPoint:      dataPathNode.IsBranchingPoint,
+			RouterAdvertisement:   dataPathNode.RouterAdvertisement,
 		}
 
 		uLTunnelInfo := new(TunnelInfo)

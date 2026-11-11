@@ -294,6 +294,9 @@ func HandlePfcpSessionEstablishmentResponse(msg *udp.Message) error {
 	ANUPF := smContext.Tunnel.DataPathPool.GetDefaultPath().FirstDPNode
 
 	if accepted && rsp.CreatedPDR != nil {
+		// The CP2UP PDR's F-TEID is where router advertisements go, not an uplink tunnel's; see
+		// ies.TakeRouterAdvertisementFTEID.
+		rsp.CreatedPDR = ies.TakeRouterAdvertisementFTEID(smContext, *nodeID, rsp.CreatedPDR)
 		ueIPAddress := FindUEIPAddress(rsp.CreatedPDR)
 		if ueIPAddress != nil {
 			smContext.SubPfcpLog.Infof("upf provided ue ip address [%v]", ueIPAddress)

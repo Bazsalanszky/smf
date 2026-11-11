@@ -37,6 +37,9 @@ type DataPathNode struct {
 
 	UpLinkTunnel   *GTPTunnel
 	DownLinkTunnel *GTPTunnel
+	// RouterAdvertisement holds the router advertisement rules of an IPv6 session, on the access
+	// node of the default path; nil elsewhere and for a session without IPv6.
+	RouterAdvertisement *RouterAdvertisementRules
 	// for UE Routing Topology
 	// for special case:
 	// branching & leafnode
@@ -914,6 +917,12 @@ func (dataPath *DataPath) ActivateTunnelAndPDR(smContext *SMContext, precedence 
 			}
 		}
 
+		// The router solicitation and advertisement rules of an IPv6 session, on the UPF the RAN's
+		// tunnel ends at, once its uplink F-TEID and downlink FAR exist.
+		if dataPath.IsDefaultPath && curDataPathNode == dataPath.FirstDPNode {
+			curDataPathNode.addRouterAdvertisementRules(smContext, defQER)
+		}
+
 		ueIpAddr := ueIpAddressIE(smContext, curDataPathNode.UPF, true)
 
 		if curDataPathNode.DownLinkTunnel != nil {
@@ -941,6 +950,7 @@ func (dataPath *DataPath) DeactivateTunnelAndPDR(smContext *SMContext) {
 			// A data path read back from the datastore can name a UPF this process does not hold.
 			continue
 		}
+		curDataPathNode.removeRouterAdvertisementRules(smContext)
 		curDataPathNode.DeactivateUpLinkTunnel(smContext)
 		curDataPathNode.DeactivateDownLinkTunnel(smContext)
 	}

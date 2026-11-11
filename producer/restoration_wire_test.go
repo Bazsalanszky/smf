@@ -221,3 +221,159 @@ func sessionWithDataPath(t *testing.T, supi string, psi int32, upf *context.UPF)
 	smContext.SMLock.Unlock()
 	return smContext, pdr.PDRID, 0x1234
 }
+
+// A restored IPv6 session gets its router advertisement rules back with the rest: the UP2CP PDR on
+// the uplink tunnel the RAN is using, named rather than chosen as the uplink PDRs are, with its FAR
+// to the SMF, and the CP2UP PDR on the downlink FAR asking the restarted UPF for a new F-TEID.
+func TestARestoredSessionReinstallsItsRouterAdvertisementRules(t *testing.T) {
+	nativeDatapath(t)
+	upfConn, upfPort := listenLoopback(t)
+	startSmfPfcpSocket(t)
+
+	upf := context.NewUPF(context.NewNodeID("127.0.0.1"), nil)
+	upf.UPFStatus = context.AssociatedSetUpSuccess
+	upf.Port = upfPort
+	upf.RecoveryTimeStamp = context.RecoveryTimeStamp{RecoveryTimeStamp: time.Now()}
+	upf.N3Interfaces = []context.UPFInterfaceInfo{{
+		NetworkInstance:       "internet",
+		IPv4EndPointAddresses: []net.IP{net.ParseIP("192.168.252.3")},
+	}}
+	smContext, _, wantTEID := sessionWithDataPath(t, "imsi-208930000000902", 1, upf)
+	smContext.PFCPContext["127.0.0.1"].RemoteSEID = 0xBEEF
+	node := smContext.Tunnel.DataPathPool[1].FirstDPNode
+	node.UpLinkTunnel.PDR[defaultPdrKey].PDI.LocalFTeid = &context.FTEID{V4: true, Ch: true, Chid: true, ChooseId: 1}
+
+	dl, err := upf.AddPDR()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dl.PDI.SourceInterface = context.SourceInterface{InterfaceValue: context.SourceInterfaceCore}
+	dl.FAR.ApplyAction.Forw = true
+	node.DownLinkTunnel = &context.GTPTunnel{PDR: map[string]*context.PDR{defaultPdrKey: dl}}
+
+	// The rules as context builds them for an IPv6 session, with the F-TEIDs an earlier
+	// incarnation of the UPF gave.
+	smf := net.ParseIP("10.0.0.9").To4()
+	rs, err := upf.AddPDR()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.PDI = context.PDI{
+		SourceInterface: context.SourceInterface{InterfaceValue: context.SourceInterfaceAccess},
+		LocalFTeid:      &context.FTEID{V4: true, Ch: true, Chid: true, ChooseId: 1},
+		SDFFilter: &context.SDFFilter{
+			Fd:                      true,
+			FlowDescription:         []byte(context.RouterSolicitationFlowDescription),
+			LengthOfFlowDescription: uint16(len(context.RouterSolicitationFlowDescription)),
+		},
+	}
+	rs.OuterHeaderRemoval = &context.OuterHeaderRemoval{OuterHeaderRemovalDescription: context.OuterHeaderRemovalGtpUUdpIp}
+	rs.FAR.ApplyAction.Forw = true
+	rs.FAR.ForwardingParameters = &context.ForwardingParameters{
+		DestinationInterface: context.DestinationInterface{InterfaceValue: context.DestinationInterfaceCPFunction},
+		OuterHeaderCreation: &context.OuterHeaderCreation{
+			OuterHeaderCreationDescription: context.OuterHeaderCreationGtpUUdpIpv4,
+			Teid:                           4321,
+			Ipv4Address:                    smf,
+		},
+	}
+	ra := &context.PDR{
+		PDRID: rs.PDRID + 1,
+		FAR:   dl.FAR,
+		PDI: context.PDI{
+			SourceInterface: context.SourceInterface{InterfaceValue: context.SourceInterfaceCPFunction},
+			LocalFTeid:      &context.FTEID{V4: true, Ch: true, Teid: 0x55, Ipv4Address: net.ParseIP("192.168.252.3").To4()},
+		},
+		OuterHeaderRemoval: &context.OuterHeaderRemoval{OuterHeaderRemovalDescription: context.OuterHeaderRemovalGtpUUdpIp},
+	}
+	node.RouterAdvertisement = &context.RouterAdvertisementRules{Solicitation: rs, Advertisement: ra}
+
+	if !reissue(smContext, "127.0.0.1") {
+		t.Fatal("the session was not re-issued")
+	}
+	if ra.PDI.LocalFTeid.Teid != 0 || ra.PDI.LocalFTeid.Ipv4Address != nil {
+		t.Errorf("the CP2UP F-TEID of the UPF's earlier incarnation was kept: %+v", ra.PDI.LocalFTeid)
+	}
+
+	establishment, ok := readPfcp(t, upfConn).(*message.SessionEstablishmentRequest)
+	if !ok {
+		t.Fatal("no establishment request")
+	}
+	createPDRs := map[uint16]*ie.IE{}
+	for _, createPDR := range establishment.CreatePDR {
+		createPDRs[must(t, createPDR.PDRID)] = createPDR
+	}
+	pdiOf := func(id uint16) (source uint8, fteid *ie.FTEIDFields, sdf string) {
+		t.Helper()
+		createPDR := createPDRs[id]
+		if createPDR == nil {
+			t.Fatalf("PDR %d was not re-installed; the request has %d Create PDRs", id, len(createPDRs))
+		}
+		for _, child := range must(t, createPDR.PDI) {
+			switch child.Type {
+			case ie.SourceInterface:
+				source = must(t, child.SourceInterface)
+			case ie.FTEID:
+				fteid = must(t, child.FTEID)
+			case ie.SDFFilter:
+				sdf = must(t, child.SDFFilter).FlowDescription
+			}
+		}
+		return source, fteid, sdf
+	}
+
+	source, fteid, sdf := pdiOf(rs.PDRID)
+	if source != ie.SrcInterfaceAccess || sdf != context.RouterSolicitationFlowDescription {
+		t.Errorf("UP2CP source interface %d, SDF %q", source, sdf)
+	}
+	if fteid == nil || fteid.HasCh() || fteid.TEID != wantTEID || !fteid.IPv4Address.Equal(net.ParseIP("192.168.252.3")) {
+		t.Errorf("UP2CP F-TEID %+v, want the uplink tunnel's %#x, named", fteid, wantTEID)
+	}
+	if precedence := must(t, createPDRs[rs.PDRID].Precedence); precedence != 0 {
+		t.Errorf("UP2CP precedence %d", precedence)
+	}
+
+	source, fteid, _ = pdiOf(ra.PDRID)
+	if source != ie.SrcInterfaceCPFunction {
+		t.Errorf("CP2UP source interface %d", source)
+	}
+	if fteid == nil || !fteid.HasCh() || fteid.HasChID() || fteid.TEID != 0 {
+		t.Errorf("CP2UP F-TEID %+v, want CHOOSE without a CHOOSE ID", fteid)
+	}
+	if farID := must(t, createPDRs[ra.PDRID].FARID); farID != dl.FAR.FARID {
+		t.Errorf("CP2UP FAR %d, want the downlink FAR %d", farID, dl.FAR.FARID)
+	}
+
+	var up2cpFAR *ie.IE
+	for _, createFAR := range establishment.CreateFAR {
+		if must(t, createFAR.FARID) == rs.FAR.FARID {
+			up2cpFAR = createFAR
+		}
+	}
+	if up2cpFAR == nil {
+		t.Fatal("the UP2CP FAR was not re-installed")
+	}
+	for _, child := range must(t, up2cpFAR.ForwardingParameters) {
+		switch child.Type {
+		case ie.DestinationInterface:
+			if di := must(t, child.DestinationInterface); di != ie.DstInterfaceCPFunction {
+				t.Errorf("UP2CP destination interface %d", di)
+			}
+		case ie.OuterHeaderCreation:
+			ohc := must(t, child.OuterHeaderCreation)
+			if ohc.OuterHeaderCreationDescription != 0x0100 || ohc.TEID != 4321 || !ohc.IPv4Address.Equal(smf) {
+				t.Errorf("UP2CP outer header creation %+v", ohc)
+			}
+		}
+	}
+}
+
+// must returns what get returns, failing the test on its error.
+func must[T any](t *testing.T, get func() (T, error)) T {
+	t.Helper()
+	v, err := get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
