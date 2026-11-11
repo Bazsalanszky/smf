@@ -590,6 +590,12 @@ func HandlePDUSessionSMContextUpdate(eventData any) error {
 
 				smContext.ChangeState(smf_context.SmStateActive)
 				smContext.SubCtxLog.Debugln("SMContextState Change State:", smContext.SMContextState.String())
+
+				// The user plane now forwards to the access tunnel: the point a router
+				// advertisement can reach the UE. TODO(ipv6-p3-ra): nothing sends one yet.
+				if isSetupResponse(txn) {
+					smContext.AdvertiseIpv6Prefix()
+				}
 			}
 		}
 
@@ -1238,4 +1244,14 @@ func HandlePFCPResponse(smContext *smf_context.SMContext,
 
 	smContext.SubPfcpLog.Debugln("out HandlePFCPResponse")
 	return httpResponse
+}
+
+// isSetupResponse reports whether an update carries the PDU Session Resource Setup Response.
+func isSetupResponse(txn *transaction.Transaction) bool {
+	req, ok := txn.Req.(models.UpdateSmContextRequest)
+	if !ok {
+		return false
+	}
+	data := req.GetJsonData()
+	return data.GetN2SmInfoType() == models.N2SMINFOTYPE_PDU_RES_SETUP_RSP
 }
