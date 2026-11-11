@@ -93,7 +93,7 @@ func BuildGSMPDUSessionEstablishmentAccept(smContext *SMContext) ([]byte, error)
 	pDUSessionEstablishmentAccept.AuthorizedQosRules.SetLen(uint16(len(qosRulesBytes)))
 	pDUSessionEstablishmentAccept.SetQosRule(qosRulesBytes)
 
-	if smContext.PDUAddress.Ip != nil {
+	if smContext.PDUAddress.Ip != nil || smContext.PDUAddress.HasIpv6() {
 		addr, addrLen := smContext.PDUAddressToNAS()
 		pDUSessionEstablishmentAccept.PDUAddress = nasType.NewPDUAddress(nasMessage.PDUSessionEstablishmentAcceptPDUAddressType)
 		pDUSessionEstablishmentAccept.PDUAddress.SetLen(addrLen)
@@ -130,7 +130,7 @@ func BuildGSMPDUSessionEstablishmentAccept(smContext *SMContext) ([]byte, error)
 	pDUSessionEstablishmentAccept.DNN.SetLen(uint8(len(dnn)))
 	pDUSessionEstablishmentAccept.SetDNN(dnn)
 
-	if smContext.ProtocolConfigurationOptions.DNSIPv4Request || smContext.ProtocolConfigurationOptions.DNSIPv6Request || smContext.ProtocolConfigurationOptions.IPv4LinkMTURequest || smContext.ProtocolConfigurationOptions.PCSCFIPv4Request {
+	if smContext.ProtocolConfigurationOptions.DNSIPv4Request || smContext.ProtocolConfigurationOptions.DNSIPv6Request || smContext.ProtocolConfigurationOptions.IPv4LinkMTURequest || smContext.ProtocolConfigurationOptions.PCSCFIPv4Request || smContext.ProtocolConfigurationOptions.PCSCFIPv6Request {
 		pDUSessionEstablishmentAccept.ExtendedProtocolConfigurationOptions = nasType.NewExtendedProtocolConfigurationOptions(
 			nasMessage.PDUSessionEstablishmentAcceptExtendedProtocolConfigurationOptionsType,
 		)
@@ -144,8 +144,9 @@ func BuildGSMPDUSessionEstablishmentAccept(smContext *SMContext) ([]byte, error)
 			}
 		}
 
-		// IPv6 DNS
-		if smContext.ProtocolConfigurationOptions.DNSIPv6Request {
+		// IPv6 DNS, for a session with IPv6: an IPv4 session has no way to reach it, and before the
+		// DNN could configure one this container was never sent.
+		if smContext.ProtocolConfigurationOptions.DNSIPv6Request && SessionHasIpv6(smContext.SelectedPDUSessionType) {
 			err := protocolConfigurationOptions.AddDNSServerIPv6Address(smContext.DNNInfo.DNS.IPv6Addr)
 			if err != nil {
 				smContext.SubGsmLog.Warnln("error while adding DNS IPv6 Addr:", err)
@@ -183,6 +184,15 @@ func BuildGSMPDUSessionEstablishmentAccept(smContext *SMContext) ([]byte, error)
 			}
 		}
 
+		// IPv6 P-CSCF, for a session with IPv6: the DNN's pcscfIpv6, else the SMF's pcscfInfos.ipv6.
+		if smContext.ProtocolConfigurationOptions.PCSCFIPv6Request && SessionHasIpv6(smContext.SelectedPDUSessionType) {
+			if pcscfIP := smContext.pcscfIPv6(); pcscfIP == nil {
+				smContext.SubGsmLog.Warnln("the UE asked for a P-CSCF IPv6 address, and none is configured")
+			} else if err := protocolConfigurationOptions.AddPCSCFIPv6Address(pcscfIP); err != nil {
+				smContext.SubGsmLog.Warnln("error while adding P-CSCF IPv6 Addr:", err)
+			}
+		}
+
 		pcoContents := protocolConfigurationOptions.Marshal()
 		pcoContentsLength := len(pcoContents)
 		pDUSessionEstablishmentAccept.
@@ -191,6 +201,19 @@ func BuildGSMPDUSessionEstablishmentAccept(smContext *SMContext) ([]byte, error)
 		pDUSessionEstablishmentAccept.SetExtendedProtocolConfigurationOptionsContents(pcoContents)
 	}
 	return m.PlainNasEncode()
+}
+
+// pcscfIPv6 is the P-CSCF IPv6 address for the session's DNN (pcscfIpv6 of its IP domain), or the
+// SMF's pcscfInfos.ipv6 when the DNN has none; nil when neither is a valid IPv6 address.
+func (smContext *SMContext) pcscfIPv6() net.IP {
+	if smContext.DNNInfo != nil && smContext.DNNInfo.PCSCFIPv6 != nil {
+		return smContext.DNNInfo.PCSCFIPv6
+	}
+	ip := net.ParseIP(SMF_Self().PCSCFInfo.IPv6Addr)
+	if ip == nil || ip.To4() != nil {
+		return nil
+	}
+	return ip
 }
 
 func BuildGSMPDUSessionEstablishmentReject(smContext *SMContext, cause uint8) ([]byte, error) {
