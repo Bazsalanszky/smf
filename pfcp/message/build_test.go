@@ -527,7 +527,7 @@ func TestBuildPfcpSessionModificationRequestNoOuterHeader(t *testing.T) {
 }
 
 func TestBuildPfcpSessionDeletionRequest(t *testing.T) {
-	msg := message.BuildPfcpSessionDeletionRequest(12, 2, 3, net.ParseIP("2.2.2.2"))
+	msg := message.BuildPfcpSessionDeletionRequest(12, 3)
 
 	if msg.MessageTypeName() != "Session Deletion Request" {
 		t.Errorf("expected message type to be 'Session Deletion Request', got %v", msg.MessageTypeName())
