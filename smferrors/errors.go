@@ -50,6 +50,10 @@ var (
 	SMContextNotFound          = NewExtProblemDetailsNotFound("Resource Not Found", "SMContext Ref is not found")
 	PduSessionTypeNotSupported = NewExtProblemDetailsWithCause("PduSession Type Not Supported", http.StatusForbidden,
 		"Unstructured PDU Type is not Supported.", utils.CauseRequestRejected)
+	PduSessionTypeIPv6OnlyAllowed = NewExtProblemDetailsWithCause("PduSession Type Not Supported", http.StatusForbidden,
+		"Only IPv6 PDU sessions are allowed for this subscriber and DNN.", utils.CauseRequestRejected)
+	UnknownPduSessionType = NewExtProblemDetailsWithCause("PduSession Type Not Supported", http.StatusForbidden,
+		"The requested PDU session type is not supported for this subscriber and DNN.", utils.CauseRequestRejected)
 )
 
 var ErrorType = map[string]models.ExtProblemDetails{
@@ -66,6 +70,8 @@ var ErrorType = map[string]models.ExtProblemDetails{
 	"ApplySMPolicyFailure":          ApplySMPolicyFailure,
 	"AMFDiscoveryFailure":           AMFDiscoveryFailure,
 	"PDUSessionTypeIPv4OnlyAllowed": PduSessionTypeNotSupported,
+	"PDUSessionTypeIPv6OnlyAllowed": PduSessionTypeIPv6OnlyAllowed,
+	"UnknownPDUSessionType":         UnknownPduSessionType,
 }
 
 // NewExtProblemDetails creates an ExtProblemDetails with basic fields
@@ -120,6 +126,8 @@ var ErrorCause = map[string]uint8{
 	"ApplySMPolicyFailure":          nasMessage.Cause5GSMRequestRejectedUnspecified,
 	"AMFDiscoveryFailure":           nasMessage.Cause5GSMRequestRejectedUnspecified,
 	"PDUSessionTypeIPv4OnlyAllowed": nasMessage.Cause5GSMPDUSessionTypeIPv4OnlyAllowed,
+	"PDUSessionTypeIPv6OnlyAllowed": nasMessage.Cause5GSMPDUSessionTypeIPv6OnlyAllowed,
+	"UnknownPDUSessionType":         nasMessage.Cause5GSMUnknownPDUSessionType,
 	"InvalidPDUSessionIdentity":     nasMessage.Cause5GSMInvalidPDUSessionIdentity,
 	// Refusing a UE-requested PDU session modification. #32 is chosen over a generic rejection
 	// because TS 24.501 subclause 6.4.2.4.3 item a makes the UE back off on its own for #32 and

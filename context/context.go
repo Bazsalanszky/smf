@@ -31,10 +31,6 @@ func init() {
 	smfContext.NfInstanceID = uuid.New().String()
 }
 
-const (
-	IPV4 = "IPv4"
-)
-
 var DefaultPfcpPort uint16 = factory.DEFAULT_PFCP_PORT
 
 var smfContext SMFContext
@@ -65,12 +61,11 @@ type SMFContext struct {
 
 	UserPlaneInformation *UserPlaneInformation
 
-	// Now only "IPv4" supported
-	// TODO: support "IPv6", "IPv4v6", "Ethernet"
-	SupportedPDUSessionType string
-	UeRoutingManager        *UERoutingManager
-	DrsmCtxts               DrsmCtxts
-	EnterpriseList          *map[string]string // map to contain slice-name:enterprise-name
+	// The PDU session type is selected per session, from the request, the subscription and the
+	// DNN's pools (SelectPDUSessionType); there is no SMF-wide supported type.
+	UeRoutingManager *UERoutingManager
+	DrsmCtxts        DrsmCtxts
+	EnterpriseList   *map[string]string // map to contain slice-name:enterprise-name
 
 	NfStatusSubscriptions sync.Map // map[NfInstanceID]models.NrfSubscriptionData.SubscriptionId
 	PodIp                 string
@@ -298,8 +293,6 @@ func InitSmfContext(config *factory.Config) *SMFContext {
 	smfContext.NFDiscoveryClient = Nnrf_NFDiscovery.NewAPIClient(NFDiscovryConfig)
 
 	smfContext.ULCLSupport = configuration.ULCL
-
-	smfContext.SupportedPDUSessionType = IPV4
 
 	smfContext.EnableNrfCaching = configuration.EnableNrfCaching
 

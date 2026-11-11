@@ -305,8 +305,9 @@ func HandlePfcpSessionEstablishmentResponse(msg *udp.Message) error {
 			// to prevent.
 			consumer.ReportUeIpChange(smContext, ueIPAddress)
 
-			// Release previous locally allocated UE IP-Addr
-			err := smContext.ReleaseUeIpAddr()
+			// Release previous locally allocated UE IP-Addr. The user plane supplies an IPv4
+			// address only, so the session's IPv6 prefix stays.
+			err := smContext.ReleaseUeIpv4Addr()
 			if err != nil {
 				logger.PfcpLog.Errorf("failed to release UE IP-Addr: %+v", err)
 			}

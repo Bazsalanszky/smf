@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -158,6 +159,24 @@ func ReleaseRestoredSession(smContext *smf_context.SMContext) {
 	}
 }
 
+// pduSessionTypeReject refuses an establishment request the SMF could not handle. A PDU session
+// type the session cannot have is refused with the cause the selection chose (#50, #51, #28, or #26
+// when the DNN has no pool for it); anything else with #50, as every refusal here was before.
+func pduSessionTypeReject(smContext *smf_context.SMContext, err error) *httpwrapper.Response {
+	var typeErr *smf_context.PDUSessionTypeError
+	if errors.As(err, &typeErr) {
+		switch typeErr.Refusal {
+		case smf_context.RefuseIPv6OnlyAllowed:
+			return smContext.GeneratePDUSessionEstablishmentReject("PDUSessionTypeIPv6OnlyAllowed")
+		case smf_context.RefuseUnknownPDUSessionType:
+			return smContext.GeneratePDUSessionEstablishmentReject("UnknownPDUSessionType")
+		case smf_context.RefuseNoPool:
+			return smContext.GeneratePDUSessionEstablishmentReject("IpAllocError")
+		}
+	}
+	return smContext.GeneratePDUSessionEstablishmentReject("PDUSessionTypeIPv4OnlyAllowed")
+}
+
 func HandlePDUSessionSMContextCreate(eventData any) error {
 	txn := eventData.(*transaction.Transaction)
 	request := txn.Req.(models.PostSmContextsRequest)
@@ -228,21 +247,6 @@ func HandlePDUSessionSMContextCreate(eventData any) error {
 		return fmt.Errorf("UdmError")
 	} else {
 		smContext.SubPduSessLog.Debugf("PDUSessionSMContextCreate, send NF Discovery Serving UDM Successful")
-	}
-
-	// IP Allocation
-	if ip, err := smContext.DNNInfo.UeIPAllocator.Allocate(smContext.Supi); err != nil {
-		smContext.SubPduSessLog.Errorln("PDUSessionSMContextCreate, failed allocate IP address: ", err)
-		txn.Rsp = smContext.GeneratePDUSessionEstablishmentReject("IpAllocError")
-		return fmt.Errorf("IpAllocError")
-	} else {
-		smContext.PDUAddress = &smf_context.UeIpAddr{
-			Ip:          ip,
-			UpfProvided: false,
-			Static:      smContext.DNNInfo.UeIPAllocator.StaticIpForImsi(smContext.Supi) != nil,
-		}
-		smContext.SubPduSessLog.Debugf("PDUSessionSMContextCreate, IP alloc success IP[%s]",
-			smContext.PDUAddress.Ip.String())
 	}
 
 	// UDM-Fetch Subscription Data based on servingnetwork.plmn and dnn, snssai
@@ -318,11 +322,11 @@ func HandlePDUSessionSMContextCreate(eventData any) error {
 		}
 	}
 
-	// Decode UE content(PCO)
+	// Decode UE content(PCO), and select the PDU session type
 	establishmentRequest := m.PDUSessionEstablishmentRequest
 	if err := smContext.HandlePDUSessionEstablishmentRequest(establishmentRequest); err != nil {
 		smContext.SubPduSessLog.Errorf("PDUSessionSMContextCreate, invalid PDU session establishment request: %v", err)
-		txn.Rsp = smContext.GeneratePDUSessionEstablishmentReject("PDUSessionTypeIPv4OnlyAllowed")
+		txn.Rsp = pduSessionTypeReject(smContext, err)
 		return fmt.Errorf("invalid PDU session establishment request: %w", err)
 	}
 
@@ -331,6 +335,16 @@ func HandlePDUSessionSMContextCreate(eventData any) error {
 		txn.Rsp = smContext.GeneratePDUSessionEstablishmentReject("PDUSessionTypeIPv4OnlyAllowed")
 		return fmt.Errorf("unstructured PDU Session not supported")
 	}
+
+	// IP Allocation, for the families the selected PDU session type carries. It used to run before
+	// the type was selected, always for IPv4.
+	if err := smContext.AllocateUeAddresses(); err != nil {
+		smContext.SubPduSessLog.Errorln("PDUSessionSMContextCreate, failed allocate IP address: ", err)
+		txn.Rsp = smContext.GeneratePDUSessionEstablishmentReject("IpAllocError")
+		return fmt.Errorf("IpAllocError")
+	}
+	smContext.SubPduSessLog.Debugf("PDUSessionSMContextCreate, IP alloc success IP[%s] IPv6 prefix[%v]",
+		smContext.PDUAddress.Ip.String(), smContext.PDUAddress.Ipv6Prefix)
 
 	if err := smContext.PCFSelection(); err != nil {
 		smContext.SubPduSessLog.Errorf("PDUSessionSMContextCreate, send NF Discovery Serving PCF Error[%v]", err)
