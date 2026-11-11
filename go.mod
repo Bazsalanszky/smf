@@ -65,3 +65,5 @@ require (
 	golang.org/x/text v0.43.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+replace github.com/omec-project/nas/v2 => github.com/Bazsalanszky/nas/v2 v2.2.8-0.20261111093723-e5839b582d54
