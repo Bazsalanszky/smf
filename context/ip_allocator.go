@@ -30,6 +30,10 @@ func NewIPAllocator(cidr string) (*IPAllocator, error) {
 
 	if _, ipnet, err := net.ParseCIDR(cidr); err != nil {
 		return nil, err
+	} else if ipnet.IP.To4() == nil {
+		// The pool size below is 2^(32-mask), which panics for an IPv6 mask longer than /32
+		// and is wrong for any other. An IPv6 pool is ueSubnetIpv6's, for Ipv6PrefixAllocator.
+		return nil, fmt.Errorf("UE subnet %s is not an IPv4 subnet; an IPv6 pool goes in ueSubnetIpv6", cidr)
 	} else {
 		allocator.ipNetwork = ipnet
 	}
