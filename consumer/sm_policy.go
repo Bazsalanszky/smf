@@ -51,12 +51,19 @@ func SendSMPolicyAssociationCreate(smContext *smf_context.SMContext) (*models.Sm
 	smPolicyData.SetPduSessionType(pduSessionType)
 	smPolicyData.SetAccessType(smContext.AnType)
 	smPolicyData.SetRatType(smContext.RatType)
-	smPolicyData.SetIpv4Address(smContext.PDUAddress.Ip.To4().String())
+	// Only an IPv4 address: To4 of anything else is nil, which used to be sent as "<nil>".
+	if ueIpv4 := smContext.PDUAddress.Ip.To4(); ueIpv4 != nil {
+		smPolicyData.SetIpv4Address(ueIpv4.String())
+	}
 	if smContext.DnnConfiguration.HasSessionAmbr() {
 		smPolicyData.SetSubsSessAmbr(smContext.DnnConfiguration.GetSessionAmbr())
 	}
 	if smContext.DnnConfiguration.HasVar5gQosProfile() {
 		smPolicyData.SetSubsDefQos(smContext.DnnConfiguration.GetVar5gQosProfile())
+	}
+	// The UE's IPv6 prefix, for a session with IPv6 (TS 29.512 clause 5.6.2.2, ipv6AddressPrefix).
+	if smContext.PDUAddress.HasIpv6() {
+		smPolicyData.SetIpv6AddressPrefix(smContext.PDUAddress.Ipv6Prefix.String())
 	}
 	smPolicyData.SetSliceInfo(*smContext.Snssai)
 	smPolicyData.SetServingNetwork(plmnIdNid)
