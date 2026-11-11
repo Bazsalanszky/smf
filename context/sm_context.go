@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,10 +85,52 @@ func decSMContextActive() uint64 {
 	return atomic.AddUint64(&smContextActive, ^uint64(0))
 }
 
+// UeIpAddr is the UE's address in each family. It is persisted with the session (PDUAddress).
+//
+// Ip is the IPv4 address, and stays that: a session without IPv4 leaves it nil. The IPv6 fields
+// were added beside it rather than replacing it, so that a document written before them reads back
+// unchanged, and they are omitted when empty, so that an IPv4 session's document is written exactly
+// as before. Their stored forms (keys as the field names, like Ip's):
+//   - Ipv6Prefix: the prefix the session holds, in CIDR text ("2001:db8:500:7::/64");
+//   - Ipv6Iid: the interface identifier the UE was given, as InterfaceIdentifier's text
+//     ("0123:4567:89ab:cdef").
+//
+// A static prefix needs no flag of its own: releasing a prefix returns it to the DNN's pool when it
+// is one of the pool's, which a static prefix from the subscription is only if it was claimed from
+// it, and is a no-op otherwise.
 type UeIpAddr struct {
 	Ip          net.IP
 	UpfProvided bool
 	Static      bool // Ip was allocated from staticIpInfo; ask HasStaticUeIpAddr, which UpfProvided overrides
+
+	// Ipv6Prefix is the IPv6 prefix allocated to the session (TS 23.501 clause 5.8.2.2.1), nil for
+	// a session without IPv6. The UPF matches the session's IPv6 traffic on it, and the router
+	// advertisement announces it.
+	Ipv6Prefix *netip.Prefix `json:"Ipv6Prefix,omitempty" yaml:"ipv6Prefix,omitempty" bson:"Ipv6Prefix,omitempty"`
+	// Ipv6Iid is the interface identifier sent to the UE in the PDU address (TS 24.501 clause
+	// 9.11.4.10), set together with Ipv6Prefix.
+	Ipv6Iid *InterfaceIdentifier `json:"Ipv6Iid,omitempty" yaml:"ipv6Iid,omitempty" bson:"Ipv6Iid,omitempty"`
+}
+
+// HasIpv4 reports whether the session holds an IPv4 address: one is set and it is not the 0.0.0.0
+// ReleaseUeIpAddr leaves.
+func (a *UeIpAddr) HasIpv4() bool {
+	return a != nil && a.Ip.To4() != nil && !a.Ip.IsUnspecified()
+}
+
+// HasIpv6 reports whether the session holds an IPv6 prefix and interface identifier.
+func (a *UeIpAddr) HasIpv6() bool {
+	return a != nil && a.Ipv6Prefix != nil && a.Ipv6Prefix.IsValid() && a.Ipv6Iid != nil
+}
+
+// Ipv6Addr is the UE's IPv6 address: its prefix with the interface identifier it was given, the
+// address it builds once the router advertisement gives it the prefix. The zero Addr when the
+// session holds no IPv6.
+func (a *UeIpAddr) Ipv6Addr() netip.Addr {
+	if !a.HasIpv6() {
+		return netip.Addr{}
+	}
+	return Ipv6Address(*a.Ipv6Prefix, *a.Ipv6Iid)
 }
 
 type SMContext struct {
