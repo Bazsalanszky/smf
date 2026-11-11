@@ -19,6 +19,7 @@ var (
 	DataRepoLog        *zap.SugaredLogger
 	GsmLog             *zap.SugaredLogger
 	PfcpLog            *zap.SugaredLogger
+	GtpuLog            *zap.SugaredLogger
 	PduSessLog         *zap.SugaredLogger
 	CtxLog             *zap.SugaredLogger
 	ConsumerLog        *zap.SugaredLogger
@@ -66,6 +67,7 @@ func init() {
 	CfgLog = log.Sugar().With("component", "SMF", "category", "CFG")
 	DataRepoLog = log.Sugar().With("component", "SMF", "category", "DRepo")
 	PfcpLog = log.Sugar().With("component", "SMF", "category", "PFCP")
+	GtpuLog = log.Sugar().With("component", "SMF", "category", "GTPU")
 	PduSessLog = log.Sugar().With("component", "SMF", "category", "PduSess")
 	GsmLog = log.Sugar().With("component", "SMF", "category", "GSM")
 	CtxLog = log.Sugar().With("component", "SMF", "category", "CTX")
