@@ -48,6 +48,12 @@ func SendPFCPRules(smContext *context.SMContext) {
 						}
 					}
 				}
+				// The router advertisement rules of an IPv6 session, on the access node of the
+				// default path. The CP2UP PDR's FAR and QER are a downlink PDR's and the session's,
+				// listed above.
+				raPDRs, raFARs := curDataPathNode.RouterAdvertisementPDRs()
+				pdrList = append(pdrList, raPDRs...)
+				farList = append(farList, raFARs...)
 
 				pfcpState := pfcpPool[curDataPathNode.GetNodeIP()]
 				if pfcpState == nil {

@@ -5,6 +5,7 @@ package ies
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/omec-project/smf/context"
@@ -44,6 +45,35 @@ func CheckOneFTEID(createdPDRs []*ie.IE) error {
 	return fmt.Errorf("the UPF assigned %d uplink PDRs different F-TEIDs where one was asked for (%s): "+
 		"it does not support CHOOSE ID, and the PDRs on a TEID the RAN was not told match no uplink packet",
 		len(assigned), strings.Join(assigned, ", "))
+}
+
+// TakeRouterAdvertisementFTEID records the F-TEID the UPF identified by nodeID chose for the
+// session's CP2UP PDR, and returns the Created PDRs without that one.
+//
+// The CP2UP PDR has an F-TEID of its own, which router advertisements are sent to. It is not an
+// uplink tunnel's: left in, CheckOneFTEID reports it as a second uplink F-TEID, and FindFTEID or
+// ApplyCreatedFTEIDs can take it for the one the RAN is told. The UP2CP PDR stays; it shares the
+// uplink tunnel's CHOOSE ID, so its F-TEID is the tunnel's.
+func TakeRouterAdvertisementFTEID(smContext *context.SMContext, nodeID context.NodeID, createdPDRs []*ie.IE) []*ie.IE {
+	out := make([]*ie.IE, 0, len(createdPDRs))
+	for _, createdPDR := range createdPDRs {
+		pdrID, err := createdPDR.PDRID()
+		if err != nil {
+			out = append(out, createdPDR)
+			continue
+		}
+		var teid uint32
+		var ipv4, ipv6 net.IP
+		fteid, err := createdPDR.FTEID()
+		if err == nil {
+			teid, ipv4, ipv6 = fteid.TEID, fteid.IPv4Address, fteid.IPv6Address
+		}
+		if smContext.RecordRouterAdvertisementFTEID(nodeID, pdrID, teid, ipv4, ipv6, err == nil) {
+			continue
+		}
+		out = append(out, createdPDR)
+	}
+	return out
 }
 
 // CreatedFTEID is the F-TEID of one Created PDR, with the ID of the PDR that carries it.
