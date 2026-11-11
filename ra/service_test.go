@@ -51,11 +51,18 @@ func testSession(upf netip.Addr) *context.SMContext {
 		}}},
 		Advertisement: &context.PDR{PDRID: 4, PDI: context.PDI{LocalFTeid: &context.FTEID{
 			Ch: true, Teid: testUPFTEID, Ipv4Address: net.IP(upf.AsSlice()),
-		}}},
+		}}, FAR: accessFAR()},
 	}
 	node := &context.DataPathNode{UPF: context.NewUPF(context.NewNodeID(upf.String()), nil), RouterAdvertisement: rules}
 	smContext.Tunnel = &context.UPTunnel{DataPathPool: context.DataPathPool{1: {IsDefaultPath: true, FirstDPNode: node}}}
 	return smContext
+}
+
+// accessFAR is the session's downlink FAR once the access tunnel is up, which the CP2UP PDR shares.
+func accessFAR() *context.FAR {
+	return &context.FAR{FARID: 2, ApplyAction: context.ApplyAction{Forw: true}, ForwardingParameters: &context.ForwardingParameters{
+		OuterHeaderCreation: &context.OuterHeaderCreation{Teid: 0x7, Ipv4Address: net.IPv4(192, 0, 2, 1)},
+	}}
 }
 
 // fakeUPF is the UPF's N3 socket the service sends advertisements to.
@@ -185,6 +192,63 @@ func TestOnlyTheSessionsSolicitationsAreAnswered(t *testing.T) {
 	upf.send(t, smf, testSEID, mustHex(t, solicitation))
 	if msg := upf.receive(t, 300*time.Millisecond); msg != nil {
 		t.Fatalf("answered: TEID %#x", msg.TEID)
+	}
+}
+
+// A solicitation that arrives before the access tunnel is up (the UE's uplink works as soon as it
+// has the setup request; the downlink FAR drops until the setup response reaches the UPF) is not
+// answered: the advertisement could not reach the UE, and Open5GS reports it as buffered downlink
+// data. Once the FAR forwards to the access tunnel, the next one is.
+func TestASolicitationBeforeTheAccessTunnelIsNotAnswered(t *testing.T) {
+	upf := newFakeUPF(t)
+	smContext := testSession(netip.MustParseAddr("127.0.0.1"))
+	_, smf := startService(t, upf, smContext)
+	far := smContext.Tunnel.DataPathPool.GetDefaultPath().FirstDPNode.RouterAdvertisement.Advertisement.FAR
+
+	// As at establishment (context/datapath.go, ActivateDownLinkPdr): drop, no outer header.
+	smContext.SMLock.Lock()
+	far.ApplyAction = context.ApplyAction{Drop: true}
+	far.ForwardingParameters = &context.ForwardingParameters{}
+	smContext.SMLock.Unlock()
+	upf.send(t, smf, testSEID, mustHex(t, solicitation))
+	if msg := upf.receive(t, 300*time.Millisecond); msg != nil {
+		t.Fatalf("answered before the access tunnel: TEID %#x", msg.TEID)
+	}
+
+	// After an AN release: buffer, the old outer header kept.
+	smContext.SMLock.Lock()
+	*far = *accessFAR()
+	far.ApplyAction = context.ApplyAction{Buff: true, Nocp: true}
+	smContext.SMLock.Unlock()
+	upf.send(t, smf, testSEID, mustHex(t, solicitation))
+	if msg := upf.receive(t, 300*time.Millisecond); msg != nil {
+		t.Fatalf("answered while the downlink buffers: TEID %#x", msg.TEID)
+	}
+
+	// The setup response's update (producer/n1n2_data_handler.go): forward to the AN.
+	smContext.SMLock.Lock()
+	*far = *accessFAR()
+	smContext.SMLock.Unlock()
+	upf.send(t, smf, testSEID, mustHex(t, solicitation))
+	checkAdvertisement(t, upf.receive(t, 5*time.Second), netip.MustParseAddr("fe80::1234:5678:9abc:def0"))
+}
+
+func TestForwardsToAccess(t *testing.T) {
+	var nilRules *context.RouterAdvertisementRules
+	for name, rules := range map[string]*context.RouterAdvertisementRules{
+		"nil rules":        nilRules,
+		"no CP2UP PDR":     {},
+		"no FAR":           {Advertisement: &context.PDR{}},
+		"drop":             {Advertisement: &context.PDR{FAR: &context.FAR{ApplyAction: context.ApplyAction{Drop: true}}}},
+		"forward, no OHC":  {Advertisement: &context.PDR{FAR: &context.FAR{ApplyAction: context.ApplyAction{Forw: true}, ForwardingParameters: &context.ForwardingParameters{}}}},
+		"buffer, with OHC": {Advertisement: &context.PDR{FAR: func() *context.FAR { f := accessFAR(); f.ApplyAction = context.ApplyAction{Buff: true}; return f }()}},
+	} {
+		if rules.ForwardsToAccess() {
+			t.Errorf("%s: forwards to access", name)
+		}
+	}
+	if !(&context.RouterAdvertisementRules{Advertisement: &context.PDR{FAR: accessFAR()}}).ForwardsToAccess() {
+		t.Error("forward with an outer header: does not forward to access")
 	}
 }
 
