@@ -13,7 +13,7 @@ import (
 
 func (obj *IPFilterRule) String() string {
 	return fmt.Sprintf("IPFilter content: ProtocolId:[%v], Source:[Ip:[%v], Mask:[%v], Port:[%v] Port-range [%v-%v]],Destination [Ip [%v], Mask [%v], Port [%v], Port-range [%v-%v]]",
-		obj.protoId, obj.sAddrv4.addr, obj.sAddrv4.mask, obj.sPort, obj.sPortRange.lowLimit, obj.sPortRange.highLimit, obj.dAddrv4.addr, obj.sAddrv4.mask, obj.dPort, obj.dPortRange.lowLimit, obj.dPortRange.highLimit)
+		obj.protoId, obj.sAddr.addr, obj.sAddr.mask, obj.sPort, obj.sPortRange.lowLimit, obj.sPortRange.highLimit, obj.dAddr.addr, obj.dAddr.mask, obj.dPort, obj.dPortRange.lowLimit, obj.dPortRange.highLimit)
 }
 
 func (obj QosRule) String() string {
