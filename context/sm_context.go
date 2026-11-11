@@ -132,6 +132,20 @@ func (a *UeIpAddr) Ipv6Addr() netip.Addr {
 	return Ipv6Address(*a.Ipv6Prefix, *a.Ipv6Iid)
 }
 
+// ReportedAddress is the address the SMF reports the session by, in the session metrics, the Kafka
+// export and the OAM session information: the IPv4 address as before for a session with one, also
+// the 0.0.0.0 its release leaves, else the IPv6 address (Ipv6Addr), else "<nil>" as before. Each
+// of those carries one address, so an IPv4v6 session is reported by its IPv4 address.
+func (a *UeIpAddr) ReportedAddress() string {
+	if a != nil && a.Ip == nil && a.HasIpv6() {
+		return a.Ipv6Addr().String()
+	}
+	if a == nil {
+		return net.IP(nil).String()
+	}
+	return a.Ip.String()
+}
+
 type SMContext struct {
 	Ref string `json:"ref" yaml:"ref" bson:"ref"`
 
@@ -693,7 +707,7 @@ func (smContext *SMContext) ChangeState(nextState SMContextState) {
 				smContext.SubCtxLog.Debug("context state change, enterprise info not available")
 			}
 
-			smContext.activeIP = smContext.PDUAddress.Ip.String()
+			smContext.activeIP = smContext.PDUAddress.ReportedAddress()
 			smContext.activeUpf = upf
 			smContext.activeEnterprise = ent
 			metrics.SetSessProfileStats(smContext.Identifier, smContext.activeIP, nextState.String(),
@@ -1557,8 +1571,8 @@ func (smContext *SMContext) PublishSmCtxtInfo() {
 
 	// Populate kafka sm ctxt struct
 	kafkaSmCtxt.Imsi = smContext.Supi
-	if smContext.PDUAddress != nil && smContext.PDUAddress.Ip != nil {
-		kafkaSmCtxt.IPAddress = smContext.PDUAddress.Ip.String()
+	if addr := smContext.PDUAddress; addr != nil && (addr.Ip != nil || addr.HasIpv6()) {
+		kafkaSmCtxt.IPAddress = addr.ReportedAddress()
 	}
 	kafkaSmCtxt.SmfSubState, op = mapPduSessStateToMetricStateAndOp(smContext.SMContextState)
 	if op == mi.SubsOpDel && smContext.SupersededByAnother() {
