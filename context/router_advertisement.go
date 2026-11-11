@@ -8,15 +8,12 @@ import "net/netip"
 
 // RouterAdvertisementSender sends the router advertisement that gives a UE its IPv6 prefix (TS
 // 23.501 clause 5.8.2.2.2). The UE has only its interface identifier from the PDU address until
-// it learns the prefix, so an IPv6 session carries no global traffic before one reaches it. Nil
-// here: the SMF sends none.
+// it learns the prefix, so an IPv6 session carries no global traffic before one reaches it. The
+// router advertisement service (package ra) sets it while the SMF's GTP-U endpoint runs; nil, the
+// SMF sends none. It is called with the session's lock held.
 //
-// TODO(ipv6-p3-ra): the SMF sends no router advertisement. The sender needs an SMF GTP-U endpoint,
-// a UP2CP PDR (Source Interface Access, SDF "permit out 58 from ff02::2/128 to assigned", a
-// precedence below the 255 of the default uplink PDR on the same F-TEID) with a FAR to the SMF and
-// a CP2UP PDR (Source Interface CP-function) on the downlink FAR, to answer
-// router solicitations, plus an unsolicited advertisement once the N3 tunnel is up: hence the
-// hook in AdvertiseIpv6Prefix. See docs/lab/open5gs-ra-path.md for the Open5GS model.
+// The service also answers router solicitations, which reach it through the session's UP2CP PDR;
+// the advertisements go to the UE through its CP2UP PDR (see RouterAdvertisementRules).
 var RouterAdvertisementSender func(smContext *SMContext, prefix netip.Prefix, iid InterfaceIdentifier)
 
 // AdvertiseIpv6Prefix is called once the user plane path to the UE is up: when the user plane has

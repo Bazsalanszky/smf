@@ -107,3 +107,61 @@ func TestApplyCreatedFTEIDsOnlyBranchPDRCarriesGroupFTEID(t *testing.T) {
 		t.Errorf("advertised address = %v, want 10.0.0.2", advertised.IPv4Address)
 	}
 }
+
+// raSession is a session whose access node, on UPF n3, has a CP2UP PDR with ID cp2upPDRID.
+func raSession(cp2upPDRID uint16) (*context.SMContext, *context.PDR) {
+	cp2up := &context.PDR{PDRID: cp2upPDRID, PDI: context.PDI{LocalFTeid: &context.FTEID{V4: true, Ch: true}}}
+	node := &context.DataPathNode{
+		UPF:                 context.NewUPF(context.NewNodeID(n3), nil),
+		UpLinkTunnel:        &context.GTPTunnel{PDR: map[string]*context.PDR{"default": {PDRID: 1}}},
+		RouterAdvertisement: &context.RouterAdvertisementRules{Advertisement: cp2up},
+	}
+	smContext := context.NewSMContext("imsi-208930000000001", 5)
+	smContext.Tunnel = &context.UPTunnel{DataPathPool: context.DataPathPool{1: {IsDefaultPath: true, FirstDPNode: node}}}
+	return smContext, cp2up
+}
+
+// The CP2UP PDR's Created PDR is taken out of the response, its F-TEID recorded as where router
+// advertisements go, so the uplink F-TEID checks and the F-TEID the RAN is told see the uplink
+// tunnel's only. Wherever it sits in the response.
+func TestTheCP2UPCreatedPDRIsNotAnUplinkFTEID(t *testing.T) {
+	for _, cp2upFirst := range []bool{true, false} {
+		smContext, cp2up := raSession(4)
+		uplink, up2cp := createdPDR(1, 0x31d, n3), createdPDR(3, 0x31d, n3)
+		created := []*ie.IE{uplink, up2cp}
+		cp2upIE := ie.NewCreatedPDR(ie.NewPDRID(4), ie.NewFTEID(0x03, 0x99, net.ParseIP(n3), net.ParseIP("fd00::1"), 0))
+		if cp2upFirst {
+			created = append([]*ie.IE{cp2upIE}, created...)
+		} else {
+			created = append(created, cp2upIE)
+		}
+
+		rest := ies.TakeRouterAdvertisementFTEID(smContext, *context.NewNodeID(n3), created)
+		if len(rest) != 2 || rest[0] != uplink || rest[1] != up2cp {
+			t.Fatalf("CP2UP first %t: %d Created PDRs left, want the uplink and UP2CP ones", cp2upFirst, len(rest))
+		}
+		if err := ies.CheckOneFTEID(rest); err != nil {
+			t.Errorf("CP2UP first %t: %v", cp2upFirst, err)
+		}
+		if f := cp2up.PDI.LocalFTeid; f.Teid != 0x99 || !f.Ipv4Address.Equal(net.ParseIP(n3)) || !f.Ipv6Address.Equal(net.ParseIP("fd00::1")) {
+			t.Errorf("CP2UP first %t: F-TEID %+v", cp2upFirst, f)
+		}
+	}
+}
+
+// A response from another UPF, or without the CP2UP PDR, is left as it is.
+func TestCreatedPDRsOfNoCP2UPPDRAreLeftAlone(t *testing.T) {
+	smContext, cp2up := raSession(4)
+	created := []*ie.IE{createdPDR(1, 0x31d, n3), createdPDR(4, 0x99, n3)}
+	if rest := ies.TakeRouterAdvertisementFTEID(smContext, *context.NewNodeID("10.0.0.2"), created); len(rest) != 2 {
+		t.Errorf("another UPF's response lost %d Created PDRs", 2-len(rest))
+	}
+	if cp2up.PDI.LocalFTeid.Teid != 0 {
+		t.Error("another UPF's F-TEID was recorded")
+	}
+	ipv4Session, _ := raSession(4)
+	ipv4Session.Tunnel.DataPathPool[1].FirstDPNode.RouterAdvertisement = nil
+	if rest := ies.TakeRouterAdvertisementFTEID(ipv4Session, *context.NewNodeID(n3), created); len(rest) != 2 {
+		t.Errorf("a session without the rules lost %d Created PDRs", 2-len(rest))
+	}
+}

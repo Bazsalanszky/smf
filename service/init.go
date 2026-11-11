@@ -39,13 +39,17 @@ import (
 	"github.com/omec-project/smf/pfcp/udp"
 	"github.com/omec-project/smf/pfcp/upf"
 	"github.com/omec-project/smf/polling"
+	"github.com/omec-project/smf/ra"
 	"github.com/omec-project/smf/util"
 	"github.com/omec-project/util/http2_util"
 	utilLogger "github.com/omec-project/util/logger"
 	"github.com/urfave/cli/v3"
 )
 
-type SMF struct{}
+type SMF struct {
+	// raService answers router solicitations; nil when cpGtpu is not configured.
+	raService *ra.Service
+}
 
 type (
 	// Config information.
@@ -294,6 +298,18 @@ func (smf *SMF) Start() {
 	}
 
 	udp.Run(pfcp.Dispatch)
+
+	// Before the SBI server, so every session it establishes gets the router advertisement
+	// rules. Without the endpoint the SMF runs as before: IPv6 sessions get no router
+	// advertisement.
+	if cfg := factory.SmfConfig.Configuration.CPGtpu; cfg != nil {
+		raService, err := ra.Start(cfg)
+		if err != nil {
+			logger.InitLog.Errorf("router advertisement service not started, IPv6 sessions get no router advertisement: %v", err)
+		} else {
+			smf.raService = raService
+		}
+	}
 	time.Sleep(1000 * time.Millisecond)
 
 	HTTPAddr := util.HostPort(smfSelf.BindingIPv4, smfSelf.SBIPort)
@@ -330,5 +346,8 @@ func (smf *SMF) Terminate(cancelServices context.CancelFunc, wg *sync.WaitGroup)
 	cancelServices()
 	nfregistration.DeregisterNF()
 	wg.Wait()
+	if smf.raService != nil {
+		smf.raService.Stop()
+	}
 	logger.InitLog.Infoln("SMF terminated")
 }

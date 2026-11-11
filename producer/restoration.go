@@ -641,6 +641,28 @@ func markRulesUncreated(smContext *context.SMContext, nodeIP string) {
 			}
 		}
 	}
+	// The router advertisement rules too. The CP2UP PDR's FAR and QER are the downlink PDR's and
+	// the session's, marked above.
+	for node, ra := range smContext.Tunnel.DataPathPool.RouterAdvertisementRulesOf() {
+		if node.UPF == nil || node.UPF.NodeID.ResolveNodeIdToIp().String() != nodeIP {
+			continue
+		}
+		pdrs, fars := node.RouterAdvertisementPDRs()
+		for _, pdr := range pdrs {
+			pdr.State = context.RULE_INITIAL
+			rules++
+		}
+		for _, far := range fars {
+			far.State = context.RULE_INITIAL
+			rules++
+		}
+		// A restarted UPF chooses the CP2UP F-TEID afresh; the one it chose before means nothing to
+		// it now, and router advertisements wait for the new one.
+		if ra.Advertisement != nil && ra.Advertisement.PDI.LocalFTeid != nil {
+			fteid := ra.Advertisement.PDI.LocalFTeid
+			fteid.Teid, fteid.Ipv4Address, fteid.Ipv6Address = 0, nil, nil
+		}
+	}
 	smContext.SubPfcpLog.Infof("marked %d rule(s) for UPF[%s] as not yet installed, so the "+
 		"re-establishment carries all of them", rules, nodeIP)
 }
@@ -693,6 +715,17 @@ func pinUplinkTunnelsToTheirExistingTeids(smContext *context.SMContext, nodeIP s
 					continue
 				}
 				pdr.PDI.LocalFTeid = &context.FTEID{
+					V4:          true,
+					Teid:        node.UpLinkTunnel.TEID,
+					Ipv4Address: access,
+				}
+				nodePinned++
+			}
+			// The UP2CP PDR shares the uplink F-TEID (its CHOOSE ID). Left choosing, it would get
+			// a TEID of its own, and router solicitations would keep arriving on the pinned one,
+			// where the default uplink PDR takes them to the data network.
+			if ra := node.RouterAdvertisement; ra != nil && ra.Solicitation != nil && ra.Solicitation.PDI.LocalFTeid != nil {
+				ra.Solicitation.PDI.LocalFTeid = &context.FTEID{
 					V4:          true,
 					Teid:        node.UpLinkTunnel.TEID,
 					Ipv4Address: access,
