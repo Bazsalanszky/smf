@@ -389,6 +389,33 @@ func (node *DataPathNode) IsAnchorUPF() bool {
 	}
 }
 
+// UplinkSourceInterfaceType is the 3GPP Interface Type of this node's uplink PDI: N3 3GPP Access
+// on the UPF the RAN's tunnel ends at. A UPF further along the path receives its uplink over N9
+// and gets none; the IE is optional (TS 29.244 clause 7.5.2.2), and the SMF leaves it out.
+func (node *DataPathNode) UplinkSourceInterfaceType() *uint8 {
+	if node.Prev() != nil {
+		return nil
+	}
+	n3 := InterfaceTypeN33GPPAccess
+	return &n3
+}
+
+// UplinkDestinationInterfaceType is the 3GPP Interface Type of this node's uplink FAR: N6 on the
+// anchor, whose uplink leaves for the data network, and none on a UPF that forwards over N9.
+//
+// The Destination Interface stays Core, which denotes the uplink direction (TS 29.244 clause
+// 8.2.24, NOTE 1), with the interface type to say the uplink leaves over N6. SGi-LAN/N6-LAN is
+// the value for steering traffic to N6-LAN service functions under a Forwarding Policy (TS 23.501
+// clause 5.6.16): a UPF that delivers to the data network only on Core and N6, as Open5GS does,
+// buffered every uplink packet the SMF sent with it.
+func (node *DataPathNode) UplinkDestinationInterfaceType() *uint8 {
+	if !node.IsAnchorUPF() {
+		return nil
+	}
+	n6 := InterfaceTypeN6
+	return &n6
+}
+
 func (dataPathPool DataPathPool) GetDefaultPath() (dataPath *DataPath) {
 	for _, path := range dataPathPool {
 		if path.IsDefaultPath {
@@ -707,6 +734,7 @@ func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER,
 		}
 
 		ULPDR.PDI.SourceInterface = SourceInterface{InterfaceValue: SourceInterfaceAccess}
+		ULPDR.PDI.SourceInterfaceType = dpNode.UplinkSourceInterfaceType()
 		// One CHOOSE ID across the tunnel's PDRs, so the UPF gives them one F-TEID (TS 29.244
 		// clause 5.5.3). The RAN is told a single uplink TEID for the PDU session, and a PDR on a
 		// TEID of its own matches no packet: without this, which rule's TEID the RAN was told
@@ -738,12 +766,8 @@ func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER,
 			DestinationInterface: DestinationInterface{
 				InterfaceValue: DestinationInterfaceCore,
 			},
-			NetworkInstance: []byte(smContext.Dnn),
-		}
-
-		if dpNode.IsAnchorUPF() {
-			ULFAR.ForwardingParameters.
-				DestinationInterface.InterfaceValue = DestinationInterfaceSgiLanN6Lan
+			NetworkInstance:          []byte(smContext.Dnn),
+			DestinationInterfaceType: dpNode.UplinkDestinationInterfaceType(),
 		}
 
 		if nextULDest := dpNode.Next(); nextULDest != nil {

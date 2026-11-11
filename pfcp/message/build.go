@@ -82,11 +82,26 @@ func (f *Flag) setBit(position uint8, value bool) {
 	}
 }
 
+// newNetworkInstance builds the Network Instance IE of a rule in the DNN dnn. TS 29.244 clause
+// 8.2.4 encodes a DNN as an APN (TS 23.003 clause 9.1): each label preceded by its length, not the
+// dotted string. The raw string was sent before; a UPF that decodes the labels, as Open5GS does,
+// failed to read it and matched no DNN-bound UE pool. An empty DNN keeps the empty IE the SMF has
+// always sent.
+func newNetworkInstance(dnn []byte) *ie.IE {
+	if len(dnn) == 0 {
+		return ie.NewNetworkInstance("")
+	}
+	return ie.NewNetworkInstanceFQDN(string(dnn))
+}
+
 func createPDIIE(pdi *context.PDI) *ie.IE {
 	createPDIIes := make([]*ie.IE, 0)
 	createPDIIes = append(createPDIIes,
 		ie.NewSourceInterface(pdi.SourceInterface.InterfaceValue),
 	)
+	if pdi.SourceInterfaceType != nil {
+		createPDIIes = append(createPDIIes, ie.NewTGPPInterfaceType(*pdi.SourceInterfaceType))
+	}
 
 	if pdi.LocalFTeid != nil {
 		fteidFlags := new(Flag)
@@ -106,7 +121,7 @@ func createPDIIE(pdi *context.PDI) *ie.IE {
 	}
 
 	createPDIIes = append(createPDIIes,
-		ie.NewNetworkInstance(string(pdi.NetworkInstance)),
+		newNetworkInstance(pdi.NetworkInstance),
 	)
 	if pdi.UEIPAddress != nil {
 		ueIPAddressflags := new(Flag)
@@ -173,14 +188,20 @@ func farToCreateFAR(far *context.FAR) *ie.IE {
 	applyActionflag.setBit(3, far.ApplyAction.Buff)
 	applyActionflag.setBit(4, far.ApplyAction.Nocp)
 	applyActionflag.setBit(5, far.ApplyAction.Dupl)
-	createFARies = append(createFARies, ie.NewApplyAction(uint8(*applyActionflag)))
+	// Apply Action is two octets since Rel-16 (TS 29.244 clause 8.2.26): the second carries
+	// EDRT, BDPN and DDPN (and later flags), none of which the SMF sets. A UPF that parses the IE
+	// at that length rejects a one-octet Apply Action, and the whole request with it.
+	createFARies = append(createFARies, ie.NewApplyAction(uint8(*applyActionflag), 0))
 	if far.BAR != nil {
 		createFARies = append(createFARies, ie.NewBARID(far.BAR.BARID))
 	}
 	if far.ForwardingParameters != nil {
 		forwardingParametersIEs := make([]*ie.IE, 0)
 		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewDestinationInterface(far.ForwardingParameters.DestinationInterface.InterfaceValue))
-		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewNetworkInstance(string(far.ForwardingParameters.NetworkInstance)))
+		forwardingParametersIEs = append(forwardingParametersIEs, newNetworkInstance(far.ForwardingParameters.NetworkInstance))
+		if far.ForwardingParameters.DestinationInterfaceType != nil {
+			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewTGPPInterfaceType(*far.ForwardingParameters.DestinationInterfaceType))
+		}
 		if far.ForwardingParameters.OuterHeaderCreation != nil {
 			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewOuterHeaderCreation(
 				far.ForwardingParameters.OuterHeaderCreation.OuterHeaderCreationDescription,
@@ -250,12 +271,15 @@ func farToUpdateFAR(far *context.FAR) *ie.IE {
 	applyActionflag.setBit(3, far.ApplyAction.Buff)
 	applyActionflag.setBit(4, far.ApplyAction.Nocp)
 	applyActionflag.setBit(5, far.ApplyAction.Dupl)
-	updateFARies = append(updateFARies, ie.NewApplyAction(uint8(*applyActionflag)))
+	updateFARies = append(updateFARies, ie.NewApplyAction(uint8(*applyActionflag), 0)) // as in farToCreateFAR
 
 	if far.ForwardingParameters != nil {
 		forwardingParametersIEs := make([]*ie.IE, 0)
 		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewDestinationInterface(far.ForwardingParameters.DestinationInterface.InterfaceValue))
-		forwardingParametersIEs = append(forwardingParametersIEs, ie.NewNetworkInstance(string(far.ForwardingParameters.NetworkInstance)))
+		forwardingParametersIEs = append(forwardingParametersIEs, newNetworkInstance(far.ForwardingParameters.NetworkInstance))
+		if far.ForwardingParameters.DestinationInterfaceType != nil {
+			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewTGPPInterfaceType(*far.ForwardingParameters.DestinationInterfaceType))
+		}
 		if far.ForwardingParameters.OuterHeaderCreation != nil {
 			forwardingParametersIEs = append(forwardingParametersIEs, ie.NewOuterHeaderCreation(
 				far.ForwardingParameters.OuterHeaderCreation.OuterHeaderCreationDescription,

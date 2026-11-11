@@ -196,8 +196,10 @@ func BuildUserPlaneInformationFromSessionManagement(existing *UserPlaneInformati
 			currentANs[gnbName] = true
 		}
 	}
+	// Removed first: the maps and default paths are rebuilt from UPNodes, and rebuilt before the
+	// removal they kept a UPF the configuration had dropped, which was then picked for sessions.
+	removeInactiveUPNodes(existing, currentUPFs, currentANs)
 	existing.RebuildUPFMaps()
-	removeInactiveUPNodes(existing.UPNodes, currentUPFs, currentANs)
 	logger.CtxLog.Infof("UPF nodes: %+v", existing.UPNodes)
 	return existing
 }
@@ -266,20 +268,43 @@ func updateSNssaiInfo(upfNode *UPNode, newInfo models.SnssaiUpfInfoItem) {
 	upfNode.UPF.SNssaiInfos = append(upfNode.UPF.SNssaiInfos, newSnssai)
 }
 
-func removeInactiveUPNodes(upnodes map[string]*UPNode, currentUPFs, currentANs map[string]bool) {
-	for name, node := range upnodes {
+// removeInactiveUPNodes drops the UPF and AN nodes the configuration no longer names, together
+// with the AccessNetwork entries and the links that lead to them. A link left behind keeps the
+// node reachable from path generation, and a UPF that comes back under the same name would be
+// taken as already linked to its gNB (nodeInLinks compares NodeIDs), so the new node would not be.
+func removeInactiveUPNodes(upi *UserPlaneInformation, currentUPFs, currentANs map[string]bool) {
+	removed := make(map[*UPNode]bool)
+	for name, node := range upi.UPNodes {
 		switch node.Type {
 		case UPNODE_UPF:
 			if _, stillActive := currentUPFs[name]; !stillActive {
-				logger.CtxLog.Debugf("removing inactive UPF node: %s", name)
-				delete(upnodes, name)
+				logger.CtxLog.Infof("removing UPF node %s: no longer in the configuration", name)
+				delete(upi.UPNodes, name)
+				removed[node] = true
 			}
 		case UPNODE_AN:
 			if _, stillActive := currentANs[name]; !stillActive {
-				logger.CtxLog.Debugf("removing inactive AN node: %s", name)
-				delete(upnodes, name)
+				logger.CtxLog.Infof("removing AN node %s: no longer in the configuration", name)
+				delete(upi.UPNodes, name)
+				if upi.AccessNetwork[name] == node {
+					delete(upi.AccessNetwork, name)
+				}
+				removed[node] = true
 			}
 		}
+	}
+	if len(removed) == 0 {
+		return
+	}
+	for _, node := range upi.UPNodes {
+		// A new slice, not a filter in place: a path built earlier may still hold the old one.
+		links := make([]*UPNode, 0, len(node.Links))
+		for _, l := range node.Links {
+			if !removed[l] {
+				links = append(links, l)
+			}
+		}
+		node.Links = links
 	}
 }
 
