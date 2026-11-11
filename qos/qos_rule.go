@@ -7,7 +7,9 @@ package qos
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -72,7 +74,11 @@ type IPFilterRulePortRange struct {
 	highLimit string
 }
 
-type IPFilterRuleIpAddrV4 struct {
+// IPFilterRuleIpAddr is one side of an IPFilterRule: an IPv4 or IPv6 address with an optional
+// prefix length, or one of the keywords "any" and "assigned" (RFC 6733 section 4.3, as used by
+// the flowDescription of TS 29.512 subclause 5.6.3.2). It holds the text as written; prefix
+// reads it.
+type IPFilterRuleIpAddr struct {
 	addr string
 	mask string
 }
@@ -81,7 +87,7 @@ type IPFilterRule struct {
 	protoId                string
 	sPort, dPort           string
 	sPortRange, dPortRange IPFilterRulePortRange
-	sAddrv4, dAddrv4       IPFilterRuleIpAddrV4
+	sAddr, dAddr           IPFilterRuleIpAddr
 }
 
 type PacketFilterComponent struct {
@@ -306,6 +312,12 @@ func BuildAddQoSRuleFromPccRule(pccRule *models.PccRule, qosData *models.QosData
 
 	qRule.BuildPacketFilterListFromPccRule(pccRule)
 
+	// Every flow may have been refused (see SetPfContent), and a rule that creates QoS without a
+	// packet filter is no more installable than one built from no flows.
+	if len(qRule.PacketFilterList) == 0 {
+		return nil
+	}
+
 	return &qRule
 }
 
@@ -338,6 +350,10 @@ func BuildModifyQosRuleFromPccRule(pccRule *models.PccRule, qosData *models.QosD
 		OperationCodeModifyExistingQoSRuleAndReplaceAllPacketFilters,
 		OperationCodeModifyExistingQoSRuleAndDeletePacketFilters:
 		qRule.BuildPacketFilterListFromPccRule(pccRule)
+		// As for a new rule: none of the flows could be encoded.
+		if len(qRule.PacketFilterList) == 0 {
+			return nil
+		}
 	case OperationCodeModifyExistingQoSRuleWithoutModifyingPacketFilters:
 		// No packet filter changes needed
 	}
@@ -385,27 +401,38 @@ func GetQosRuleIdFromPccRuleId(pccRuleId string) uint8 {
 	}
 }
 
+// BuildPacketFilterListFromPccRule builds a packet filter for each flow of the rule. A flow whose
+// description cannot be encoded is left out, and said so: the rule then matches less traffic than
+// the PCC rule, where a filter without its address would have matched more.
 func (q *QosRule) BuildPacketFilterListFromPccRule(pccRule *models.PccRule) {
 	pfList := []PacketFilter{}
 
 	// Iterate through
 	for _, flow := range pccRule.FlowInfos {
-		pf := GetPacketFilterFromFlowInfo(&flow)
+		pf, err := GetPacketFilterFromFlowInfo(&flow)
+		if err != nil {
+			logger.QosLog.Errorf("PCC rule [%s]: packet filter [%s] left out of the QoS rule: %v",
+				pccRule.GetPccRuleId(), flow.GetPackFiltId(), err)
+			continue
+		}
 		pfList = append(pfList, pf)
 	}
 	q.PacketFilterList = pfList
 }
 
-func GetPacketFilterFromFlowInfo(flowInfo *models.FlowInformation) PacketFilter {
+// GetPacketFilterFromFlowInfo builds the packet filter of one flow, or fails as SetPfContent does.
+func GetPacketFilterFromFlowInfo(flowInfo *models.FlowInformation) (PacketFilter, error) {
 	pf := &PacketFilter{
 		Identifier: GetPfId(flowInfo.GetPackFiltId()),
 		Direction:  GetPfDirectionFromPccFlowInfo(flowInfo.GetFlowDirection()),
 	}
 
 	// Fill PF component contents
-	pf.GetPfContent(flowInfo.GetFlowDescription())
+	if err := pf.SetPfContent(flowInfo.GetFlowDescription()); err != nil {
+		return PacketFilter{}, err
+	}
 
-	return *pf
+	return *pf, nil
 }
 
 func GetPfId(pfID string) uint8 {
@@ -442,6 +469,10 @@ func GetPfDirectionFromPccFlowInfo(flowDir models.FlowDirectionRm) uint8 {
 //
 //	0		1 	2		3	  4   				5   		   6 	7						8
 //
+// An address may be IPv6 as well, as in "permit out 17 from 2001:db8::1/64 53 to assigned". The
+// tokens are split on white space and an address from its length on the "/" only, so the colons of
+// an IPv6 literal are never read as a port separator: ports are tokens of their own.
+//
 // See spec 29212-5.4.2 / 29512-5.6.3.2
 func DecodeFlowDescToIPFilters(flowDesc string) *IPFilterRule {
 	// Tokenize flow desc and make PF components
@@ -454,7 +485,7 @@ func DecodeFlowDescToIPFilters(flowDesc string) *IPFilterRule {
 	ipfRule.protoId = pfcTags[2]
 
 	// decode source IP/mask
-	ipfRule.decodeIpFilterAddrv4(true, pfcTags[4])
+	ipfRule.decodeIpFilterAddr(true, pfcTags[4])
 
 	// decode source port/port-range (optional)
 	if pfcTags[6] == "to" {
@@ -462,7 +493,7 @@ func DecodeFlowDescToIPFilters(flowDesc string) *IPFilterRule {
 		ipfRule.decodeIpFilterPortInfo(true, pfcTags[5])
 
 		// decode destination IP/mask
-		ipfRule.decodeIpFilterAddrv4(false, pfcTags[7])
+		ipfRule.decodeIpFilterAddr(false, pfcTags[7])
 
 		// decode destination port/port-range(optional), if any
 		if len(pfcTags) == 9 {
@@ -470,7 +501,7 @@ func DecodeFlowDescToIPFilters(flowDesc string) *IPFilterRule {
 		}
 	} else {
 		// decode destination IP/mask
-		ipfRule.decodeIpFilterAddrv4(false, pfcTags[6])
+		ipfRule.decodeIpFilterAddr(false, pfcTags[6])
 
 		// decode destination port/port-range(optional), if any
 		if len(pfcTags) == 8 {
@@ -482,7 +513,7 @@ func DecodeFlowDescToIPFilters(flowDesc string) *IPFilterRule {
 }
 
 func (ipf *IPFilterRule) IsMatchAllIPFilter() bool {
-	if ipf.sAddrv4.addr == "any" && ipf.dAddrv4.addr == "assigned" {
+	if ipf.sAddr.addr == ipFilterAddrAny && ipf.dAddr.addr == ipFilterAddrAssigned {
 		return true
 	}
 	return false
@@ -509,25 +540,84 @@ func (ipfRule *IPFilterRule) decodeIpFilterPortInfo(source bool, tag string) {
 	}
 }
 
-func (ipfRule *IPFilterRule) decodeIpFilterAddrv4(source bool, tag string) {
+func (ipfRule *IPFilterRule) decodeIpFilterAddr(source bool, tag string) {
 	ipAndMask := strings.Split(tag, "/")
 	if source {
-		ipfRule.sAddrv4.addr = ipAndMask[0] // can be x.x.x.x or "any"
+		ipfRule.sAddr.addr = ipAndMask[0] // can be x.x.x.x, an IPv6 address or "any"
 	} else {
-		ipfRule.dAddrv4.addr = ipAndMask[0] // can be x.x.x.x or "assigned"
+		ipfRule.dAddr.addr = ipAndMask[0] // can be x.x.x.x, an IPv6 address or "assigned"
 	}
 
 	// mask can be nil
 	if len(ipAndMask) > 1 {
 		if source {
-			ipfRule.sAddrv4.mask = ipAndMask[1]
+			ipfRule.sAddr.mask = ipAndMask[1]
 		} else {
-			ipfRule.dAddrv4.mask = ipAndMask[1]
+			ipfRule.dAddr.mask = ipAndMask[1]
 		}
 	}
 }
 
+// The keywords an IPFilterRule may give instead of an address (RFC 6733 section 4.3): "any"
+// matches every address and "assigned" the address assigned to the UE. Neither is an address a
+// packet filter component can carry.
+const (
+	ipFilterAddrAny      = "any"
+	ipFilterAddrAssigned = "assigned"
+)
+
+// isKeyword reports whether the side names "any" or "assigned" rather than an address.
+func (a IPFilterRuleIpAddr) isKeyword() bool {
+	return a.addr == ipFilterAddrAny || a.addr == ipFilterAddrAssigned
+}
+
+// prefix reads the side as an address of either family with its prefix length. Without a length
+// the address stands for itself alone: /32 for IPv4, /128 for IPv6. The address is kept as written,
+// host bits and all, as the IPv4 encoding always kept it.
+//
+// An IPv4-mapped IPv6 address reads as the IPv4 address it maps, because net.IP.To4 read it so and
+// the IPv4 packet filter encoding is not to change; its length is then an IPv4 one. An address with
+// a zone, a negated one ("!") and a length beyond the family's are refused, as is anything else
+// that is not an address: a packet filter that left them out would match more than the rule.
+func (a IPFilterRuleIpAddr) prefix() (netip.Prefix, error) {
+	addr, err := netip.ParseAddr(a.addr)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("address %q: %w", a.addr, err)
+	}
+	if addr.Zone() != "" {
+		return netip.Prefix{}, fmt.Errorf("address %q: an address with a zone is not a packet filter address", a.addr)
+	}
+	addr = addr.Unmap()
+
+	bits := addr.BitLen()
+	if a.mask != "" {
+		// strconv.Atoi, as the IPv4 encoding read the length before, so a length it took is
+		// still taken.
+		if bits, err = strconv.Atoi(a.mask); err != nil {
+			return netip.Prefix{}, fmt.Errorf("address %q: prefix length %q: %w", a.addr, a.mask, err)
+		}
+	}
+
+	prefix := netip.PrefixFrom(addr, bits)
+	if !prefix.IsValid() {
+		return netip.Prefix{}, fmt.Errorf("address %q: prefix length %q is out of range for the family", a.addr, a.mask)
+	}
+	return prefix, nil
+}
+
+// GetPfContent fills the packet filter from a flow description, as SetPfContent does. A
+// description SetPfContent refuses is logged and leaves the filter as it was.
 func (pf *PacketFilter) GetPfContent(flowDesc string) {
+	if err := pf.SetPfContent(flowDesc); err != nil {
+		logger.QosLog.Errorf("flow description [%s] not encoded: %v", flowDesc, err)
+	}
+}
+
+// SetPfContent fills the packet filter components from a flow description (TS 24.501 subclause
+// 9.11.4.13). It fails, and leaves the filter as it was, when an address of the description cannot
+// be encoded: leaving the address out instead would give the UE a filter matching more than the
+// PCC rule does, all traffic in the worst case.
+func (pf *PacketFilter) SetPfContent(flowDesc string) error {
 	pfcList := []PacketFilterComponent{}
 
 	ipf := DecodeFlowDescToIPFilters(flowDesc)
@@ -543,7 +633,17 @@ func (pf *PacketFilter) GetPfContent(flowDesc string) {
 		pfcList = append(pfcList, *pfc)
 		pf.ContentLength += 1
 		pf.Content = pfcList
-		return
+		return nil
+	}
+
+	// Both addresses first, so that a refused one leaves the filter untouched.
+	remoteAddr, remoteAddrLen, err := buildPFCompAddr(false, ipf.sAddr)
+	if err != nil {
+		return fmt.Errorf("remote address: %w", err)
+	}
+	localAddr, localAddrLen, err := buildPFCompAddr(true, ipf.dAddr)
+	if err != nil {
+		return fmt.Errorf("local address: %w", err)
 	}
 
 	// Protocol identifier/Next header type
@@ -553,9 +653,9 @@ func (pf *PacketFilter) GetPfContent(flowDesc string) {
 	}
 
 	// Remote Addr
-	if pfc, plen := buildPFCompAddr(false, ipf.sAddrv4); pfc != nil {
-		pfcList = append(pfcList, *pfc)
-		pf.ContentLength += plen
+	if remoteAddr != nil {
+		pfcList = append(pfcList, *remoteAddr)
+		pf.ContentLength += remoteAddrLen
 	}
 
 	// Remote Port
@@ -571,9 +671,9 @@ func (pf *PacketFilter) GetPfContent(flowDesc string) {
 	}
 
 	// Local Addr
-	if pfc, plen := buildPFCompAddr(true, ipf.dAddrv4); pfc != nil {
-		pfcList = append(pfcList, *pfc)
-		pf.ContentLength += plen
+	if localAddr != nil {
+		pfcList = append(pfcList, *localAddr)
+		pf.ContentLength += localAddrLen
 	}
 
 	// Local Port
@@ -589,56 +689,50 @@ func (pf *PacketFilter) GetPfContent(flowDesc string) {
 	}
 
 	pf.Content = pfcList
+	return nil
 }
 
-func buildPFCompAddr(local bool, val IPFilterRuleIpAddrV4) (*PacketFilterComponent, uint8) {
-	component := PFComponentTypeIPv4RemoteAddress
+// buildPFCompAddr builds the address component of one side of a flow description, with the
+// length it adds to the packet filter's contents (the type octet and the value).
+//
+//   - IPv4: IPv4 remote (0x10) or local (0x11) address, 4 octets of address and 4 of mask.
+//   - IPv6: IPv6 remote (0x21) or local (0x23) address/prefix length, 16 octets of address and 1 of
+//     prefix length (TS 24.501 Table 9.11.4.13.1). The 0x22 form, which it deprecates, is not used.
+//
+// The keywords "any" and "assigned" build no component: "any" matches every address, and the
+// address assigned to the UE is the one the filter is applied to anyway. Anything else that is not
+// an address of either family is an error, not a missing component.
+func buildPFCompAddr(local bool, val IPFilterRuleIpAddr) (*PacketFilterComponent, uint8, error) {
+	if val.isKeyword() {
+		return nil, 0, nil
+	}
 
+	prefix, err := val.prefix()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if prefix.Addr().Is4() {
+		component := PFComponentTypeIPv4RemoteAddress
+		if local {
+			component = PFComponentTypeIPv4LocalAddress
+		}
+		addr := prefix.Addr().As4()
+		value := make([]byte, 0, 8)
+		value = append(value, addr[:]...)
+		value = append(value, net.CIDRMask(prefix.Bits(), 32)...)
+		return &PacketFilterComponent{ComponentType: component, ComponentValue: value}, 9, nil
+	}
+
+	component := PFComponentTypeIPv6RemoteAddress
 	if local {
-		component = PFComponentTypeIPv4LocalAddress
-		// if local address value- "assigned" then don't need to set it
-		if val.addr == "assigned" {
-			return nil, 0
-		}
-	} else {
-		// if remote address value- "any" then don't need to set it
-		if val.addr == "any" {
-			return nil, 0
-		}
+		component = PFComponentTypeIPv6LocalAddress
 	}
-
-	pfc := &PacketFilterComponent{
-		ComponentType:  component,
-		ComponentValue: make([]byte, 0),
-	}
-
-	var addr, mask []byte
-
-	if ipAddr := net.ParseIP(val.addr); ipAddr == nil {
-		return nil, 0
-	} else {
-		// check if it is valid v4 addr
-		if v4addr := ipAddr.To4(); v4addr == nil {
-			return nil, 0
-		} else {
-			addr = []byte(v4addr)
-			pfc.ComponentValue = append(pfc.ComponentValue, addr...)
-		}
-	}
-
-	if val.mask != "" {
-		maskInt, err := strconv.Atoi(val.mask)
-		if err != nil {
-			logger.QosLog.Errorf("error converting mask to int: %s", err)
-		}
-		mask = net.CIDRMask(maskInt, 32)
-		pfc.ComponentValue = append(pfc.ComponentValue, mask...)
-	} else {
-		mask = net.CIDRMask(32, 32)
-		pfc.ComponentValue = append(pfc.ComponentValue, mask...)
-	}
-
-	return pfc, 9
+	addr := prefix.Addr().As16()
+	value := make([]byte, 0, 17)
+	value = append(value, addr[:]...)
+	value = append(value, uint8(prefix.Bits()))
+	return &PacketFilterComponent{ComponentType: component, ComponentValue: value}, 18, nil
 }
 
 func buildPFCompPort(local bool, val string) (*PacketFilterComponent, uint8) {
