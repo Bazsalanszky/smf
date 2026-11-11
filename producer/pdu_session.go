@@ -591,8 +591,8 @@ func HandlePDUSessionSMContextUpdate(eventData any) error {
 				smContext.ChangeState(smf_context.SmStateActive)
 				smContext.SubCtxLog.Debugln("SMContextState Change State:", smContext.SMContextState.String())
 
-				// The user plane now forwards to the access tunnel: the point a router
-				// advertisement can reach the UE. TODO(ipv6-p3-ra): nothing sends one yet.
+				// The user plane now forwards to the access tunnel: the point an unsolicited
+				// router advertisement can reach the UE.
 				if isSetupResponse(txn) {
 					smContext.AdvertiseIpv6Prefix()
 				}
