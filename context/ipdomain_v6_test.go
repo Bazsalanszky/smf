@@ -6,8 +6,10 @@ package context
 
 import (
 	"net"
+	"reflect"
 	"testing"
 
+	"github.com/omec-project/openapi/v2/models"
 	"github.com/omec-project/openapi/v2/nfConfigApi"
 )
 
@@ -98,5 +100,31 @@ func TestIpDomainIPv4BuildsNoIPv6(t *testing.T) {
 	}
 	if !info.DNS.IPv4Addr.Equal(net.ParseIP(testDnsIpv4)) || info.MTU != 1400 || !info.HasIpv4Pool() {
 		t.Errorf("IPv4 DNN info %+v", info)
+	}
+}
+
+// The PDU session types a DNN's UPF entry lists follow its pools; a domain without an IPv6 pool
+// lists IPv4 as before.
+func TestDnnPduSessionTypes(t *testing.T) {
+	str := func(s string) *string { return &s }
+	v4, v6, v4v6 := models.PDUSESSIONTYPE_IPV4, models.PDUSESSIONTYPE_IPV6, models.PDUSESSIONTYPE_IPV4_V6
+	for _, tc := range []struct {
+		name   string
+		domain nfConfigApi.IpDomain
+		want   []models.PduSessionType
+	}{
+		{"IPv4 pool", nfConfigApi.IpDomain{DnnName: "a", UeSubnet: testUeV4Subnet}, []models.PduSessionType{v4}},
+		{"no pool", nfConfigApi.IpDomain{DnnName: "b"}, []models.PduSessionType{v4}},
+		{"IPv6 pool", nfConfigApi.IpDomain{DnnName: "c", UeSubnetIpv6: str(testUeIpv6Pool)}, []models.PduSessionType{v6}},
+		{
+			"both pools",
+			nfConfigApi.IpDomain{DnnName: "d", UeSubnet: testUeV4Subnet, UeSubnetIpv6: str(testUeIpv6Pool)},
+			[]models.PduSessionType{v4, v6, v4v6},
+		},
+	} {
+		got := convertIpDomainsToDnnList([]nfConfigApi.IpDomain{tc.domain})
+		if len(got) != 1 || !reflect.DeepEqual(got[0].PduSessionTypes, tc.want) {
+			t.Errorf("%s: %+v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
