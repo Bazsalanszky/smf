@@ -337,7 +337,8 @@ func SendPfcpSessionEstablishmentRequest(
 
 	fseidV4, fseidV6 := smf_context.SMF_Self().FSEIDAddrs()
 
-	pfcpMsg, err := BuildPfcpSessionEstablishmentRequest(
+	pfcpMsg, err := BuildPfcpSessionEstablishmentRequestOfPDNType(
+		PDNType(ctx.SelectedPDUSessionType),
 		getSeqNumber(),
 		smf_context.SMF_Self().CPNodeID.ValueString(),
 		fseidV4,
