@@ -217,3 +217,67 @@ func TestASessionDeletionRequestIsTheHeaderAlone(t *testing.T) {
 			req.SEID(), req.Sequence(), len(req.IEs), uint64(remoteSEID))
 	}
 }
+
+// TS 29.244 clause 8.2.4: a Network Instance holding a DNN is encoded as an APN (TS 23.003 clause
+// 9.1), each label after its length, not as the dotted string. Open5GS decodes the labels and
+// rejected the raw string ("Invalid pdi.network_instance"), so a UE pool bound to the DNN never
+// matched. An empty DNN stays the empty IE.
+func TestTheNetworkInstanceIsLabelEncodedOnTheWire(t *testing.T) {
+	const testDnn = "internet"
+
+	for _, tc := range []struct {
+		dnn  string
+		want []byte
+	}{
+		{testDnn, []byte("\x08" + testDnn)},
+		{"ims.mnc001.mcc001.gprs", []byte("\x03ims\x06mnc001\x06mcc001\x04gprs")},
+		{"", []byte{}},
+	} {
+		t.Run(tc.dnn, func(t *testing.T) {
+			pdr := &context.PDR{
+				PDRID: 1,
+				FAR:   &context.FAR{FARID: 1},
+				PDI:   context.PDI{NetworkInstance: []byte(tc.dnn)},
+			}
+			far := &context.FAR{
+				FARID:                1,
+				ApplyAction:          context.ApplyAction{Forw: true},
+				ForwardingParameters: &context.ForwardingParameters{NetworkInstance: []byte(tc.dnn)},
+			}
+			req := establishmentOnTheWire(t, []*context.PDR{pdr}, []*context.FAR{far})
+
+			pdi, err := req.CreatePDR[0].PDI()
+			if err != nil {
+				t.Fatalf("decoding the PDI: %v", err)
+			}
+			checkNetworkInstance(t, "PDI", childIE(t, pdi, ie.NetworkInstance), tc.dnn, tc.want)
+
+			fwd, err := req.CreateFAR[0].ForwardingParameters()
+			if err != nil {
+				t.Fatalf("decoding the forwarding parameters: %v", err)
+			}
+			checkNetworkInstance(t, "Create FAR", childIE(t, fwd, ie.NetworkInstance), tc.dnn, tc.want)
+
+			far.State = context.RULE_UPDATE
+			mod := modificationOnTheWire(t, []*context.FAR{far})
+			upd, err := mod.UpdateFAR[0].UpdateForwardingParameters()
+			if err != nil {
+				t.Fatalf("decoding the update forwarding parameters: %v", err)
+			}
+			checkNetworkInstance(t, "Update FAR", childIE(t, upd, ie.NetworkInstance), tc.dnn, tc.want)
+		})
+	}
+}
+
+func checkNetworkInstance(t *testing.T, where string, ni *ie.IE, dnn string, want []byte) {
+	t.Helper()
+	if string(ni.Payload) != string(want) {
+		t.Errorf("%s: Network Instance octets %q, want %q", where, ni.Payload, want)
+	}
+	if dnn == "" {
+		return
+	}
+	if got, err := ni.NetworkInstanceFQDN(); err != nil || got != dnn {
+		t.Errorf("%s: Network Instance decodes as %q (%v), want %q", where, got, err, dnn)
+	}
+}
