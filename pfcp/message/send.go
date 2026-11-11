@@ -647,7 +647,7 @@ func SendPfcpSessionDeletionRequest(upNodeID smf_context.NodeID, ctx *smf_contex
 		return fmt.Errorf("PFCP Context not found for NodeID[%s]", upNodeIDStr)
 	}
 	pfcpContext := ctx.PFCPContext[pfcpKey]
-	pfcpMsg := BuildPfcpSessionDeletionRequest(seqNum, pfcpContext.LocalSEID, pfcpContext.RemoteSEID, smf_context.SMF_Self().CPNodeID.ResolveNodeIdToIp())
+	pfcpMsg := BuildPfcpSessionDeletionRequest(seqNum, pfcpContext.RemoteSEID)
 
 	upaddr := &net.UDPAddr{
 		IP:   upNodeID.ResolveNodeIdToIp(),

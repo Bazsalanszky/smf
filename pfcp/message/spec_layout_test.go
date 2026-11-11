@@ -189,3 +189,31 @@ func checkInterface(t *testing.T, where string, ies []*ie.IE, ifaceIE uint16, wa
 		t.Errorf("%s: 3GPP Interface Type %d, want %d", where, typ, wantType)
 	}
 }
+
+// TS 29.244 clause 7.5.6: a Session Deletion Request names its session by the SEID in the header
+// and has no IEs. The SMF used to add its CP F-SEID. Open5GS does not parse a body for this message
+// and drops any request that has one, unanswered, so every released session stayed on the UPF.
+func TestASessionDeletionRequestIsTheHeaderAlone(t *testing.T) {
+	const remoteSEID = 0x0102030405060708
+	msg := message.BuildPfcpSessionDeletionRequest(12, remoteSEID)
+	buf := make([]byte, msg.MarshalLen())
+	if err := msg.MarshalTo(buf); err != nil {
+		t.Fatalf("marshalling the deletion request: %v", err)
+	}
+
+	// Version 1 with the S flag (and MP, the builder's message priority), type 54, then the
+	// length, SEID, sequence number and priority octet: 16 octets (clause 7.2.2), and the length
+	// counts the 12 after the first 4.
+	if len(buf) != 16 || buf[0]&0xe1 != 0x21 || buf[1] != 54 || buf[2] != 0 || buf[3] != 12 {
+		t.Fatalf("deletion request on the wire % x, want a 16-octet header with no IEs", buf)
+	}
+
+	req, err := pfcp_message.ParseSessionDeletionRequest(buf)
+	if err != nil {
+		t.Fatalf("parsing the deletion request: %v", err)
+	}
+	if req.SEID() != remoteSEID || req.Sequence() != 12 || len(req.IEs) != 0 {
+		t.Errorf("deletion request: SEID %#x, sequence %d, %d IEs; want %#x, 12, none",
+			req.SEID(), req.Sequence(), len(req.IEs), uint64(remoteSEID))
+	}
+}
