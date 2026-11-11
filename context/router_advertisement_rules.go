@@ -84,6 +84,22 @@ type RouterAdvertisementRules struct {
 	Advertisement *PDR
 }
 
+// ForwardsToAccess reports whether the CP2UP PDR's FAR, the session's downlink FAR, forwards to the
+// access tunnel. Until the UPF has the AN's F-TEID from the PDU Session Resource Setup Response that
+// FAR drops (or buffers, after an AN release), so an advertisement sent to the CP2UP F-TEID cannot
+// reach the UE. A UE can still solicit in that window: its uplink works as soon as it has the setup
+// request, before the SMF has sent the UPF the access tunnel. Open5GS then buffers the advertisement
+// and sends a Downlink Data Report, which the SMF rejects. The update that installs the access
+// tunnel sets this FAR and sends the unsolicited advertisement under the session's lock, so a
+// solicitation answered under that lock sees either the old FAR or one the UPF has accepted.
+func (rules *RouterAdvertisementRules) ForwardsToAccess() bool {
+	if rules == nil || rules.Advertisement == nil || rules.Advertisement.FAR == nil {
+		return false
+	}
+	far := rules.Advertisement.FAR
+	return far.ApplyAction.Forw && far.ForwardingParameters != nil && far.ForwardingParameters.OuterHeaderCreation != nil
+}
+
 // RouterAdvertisementTEID is the TEID the UPF sends a session's router solicitations to the SMF
 // with: the session's local SEID on that UPF. A local SEID is unique within the SMF (and across SMF
 // instances when the SEID pool is shared), survives a restart in the stored session, and finds the

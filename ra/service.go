@@ -211,6 +211,13 @@ func (s *Service) answer(teid uint32, rs *ndp.RouterSolicitation, from netip.Add
 		smContext.SubPduSessLog.Warnf("router solicitation from %s not answered: %v", rs.Source, err)
 		return
 	}
+	if !path.Rules.ForwardsToAccess() {
+		// The access tunnel is not up yet: the unsolicited advertisement goes to all nodes, the
+		// soliciting UE included, once it is (context.SMContext.AdvertiseIpv6Prefix).
+		smContext.SubPduSessLog.Infof("router solicitation from %s not answered yet: the access tunnel is not up; "+
+			"the unsolicited advertisement follows when it is", rs.Source)
+		return
+	}
 	if path.SMFTEID != teid {
 		// The session's rules on this UPF name another TEID: the solicitation was forwarded by
 		// rules the session no longer has.
