@@ -146,5 +146,5 @@ func anTransportFamily(node *DataPathNode) AddressFamily {
 	if node == nil || node.UPF == nil {
 		return AddressFamilyAuto
 	}
-	return node.UPF.GetTransportFamily()
+	return node.UPF.GetN3Transport().Family
 }

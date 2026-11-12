@@ -713,3 +713,57 @@ func TestAnIPv6N3SessionOnTheWire(t *testing.T) {
 		t.Error("no outer header creation on the downlink FAR")
 	}
 }
+
+// A dual N3 asks for a CHOOSE F-TEID with V4 and V6 and removes GTP-U/UDP/IP (TS 29.244 clauses
+// 8.2.3 and 8.2.64).
+func TestADualN3SessionOnTheWire(t *testing.T) {
+	ul := &context.PDR{PDRID: 1, FAR: &context.FAR{FARID: 1}}
+	dpNode := &context.DataPathNode{
+		UPF: &context.UPF{N3Advertised: context.N3Advertisement{Known: true, V4: true, V6: true}},
+		UpLinkTunnel: &context.GTPTunnel{
+			PDR: map[string]*context.PDR{"default": ul},
+		},
+	}
+	smContext := &context.SMContext{PDUAddress: &context.UeIpAddr{Ip: net.IPv4(192, 168, 1, 1)}, Dnn: testDnnName}
+	if err := dpNode.ActivateUpLinkPdr(smContext, &context.QER{QERID: 1}, 10); err != nil {
+		t.Fatalf("ActivateUpLinkPdr: %v", err)
+	}
+	msg, err := message.BuildPfcpSessionEstablishmentRequest(45, cpNodeID, net.ParseIP(cpNodeID), 1,
+		[]*context.PDR{ul}, []*context.FAR{ul.FAR}, nil)
+	if err != nil {
+		t.Fatalf("building the establishment request: %v", err)
+	}
+	buf := make([]byte, msg.MarshalLen())
+	if err = msg.MarshalTo(buf); err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	req, err := pfcp_message.ParseSessionEstablishmentRequest(buf)
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	pdi, err := req.CreatePDR[0].PDI()
+	if err != nil {
+		t.Fatalf("PDI: %v", err)
+	}
+	var seen bool
+	for _, x := range pdi {
+		if x.Type != ie.FTEID {
+			continue
+		}
+		fteid, ferr := x.FTEID()
+		if ferr != nil {
+			t.Fatalf("F-TEID: %v", ferr)
+		}
+		seen = true
+		if !fteid.HasIPv4() || !fteid.HasIPv6() || !fteid.HasCh() || !fteid.HasChID() {
+			t.Errorf("F-TEID flags %#x: want CH, CHID, V4 and V6", fteid.Flags)
+		}
+	}
+	if !seen {
+		t.Error("no F-TEID in the PDI")
+	}
+	ohr, err := req.CreatePDR[0].OuterHeaderRemovalDescription()
+	if err != nil || ohr != context.OuterHeaderRemovalGtpUUdpIp {
+		t.Errorf("outer header removal %d (%v), want %d", ohr, err, context.OuterHeaderRemovalGtpUUdpIp)
+	}
+}

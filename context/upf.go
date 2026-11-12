@@ -94,6 +94,9 @@ type UPF struct {
 	// value lets each interface use what it has (see UPFInterfaceInfo.TransportIP). It is
 	// set from the upfTransportFamily configuration, under UpfLock.
 	TransportFamily AddressFamily
+	// N3Advertised is what the UPF's UP IP Resource Information said about its N3 addresses at
+	// the last association; with TransportFamily it gives the N3 transport (N3TransportLocked).
+	N3Advertised N3Advertisement
 
 	// lock
 	UpfLock sync.RWMutex

@@ -737,7 +737,7 @@ func ueIpAddressIE(smContext *SMContext, upf *UPF, downlink bool) UEIPAddress {
 // ActivateUpLinkPdr
 func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER, defPrecedence uint32) error {
 	ueIpAddr := ueIpAddressIE(smContext, dpNode.UPF, false)
-	n3Family := dpNode.UPF.GetTransportFamily()
+	n3 := dpNode.UPF.GetN3Transport()
 
 	curULTunnel := dpNode.UpLinkTunnel
 	for name, ULPDR := range curULTunnel.PDR {
@@ -754,10 +754,9 @@ func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER,
 		// clause 5.5.3). The RAN is told a single uplink TEID for the PDU session, and a PDR on a
 		// TEID of its own matches no packet: without this, which rule's TEID the RAN was told
 		// followed map order, and uplink the told rule did not match was dropped. The family
-		// is the UPF's N3 transport family, never the PDU session type (UplinkFTEIDFamilies).
-		// TODO(ipv6-p2): a dual F-TEID (V4 and V6) needs the 160-bit TransportLayerAddress
-		// towards the RAN, see BuildPDUSessionResourceSetupRequestTransfer.
-		v4, v6 := UplinkFTEIDFamilies(n3Family)
+		// is the UPF's N3 transport, never the PDU session type (UplinkFTEIDFamilies): both for a
+		// dual N3, and the RAN is then told both addresses (N3TransportLayerAddressLocked).
+		v4, v6 := UplinkFTEIDFamilies(n3)
 		ULPDR.PDI.LocalFTeid = &FTEID{
 			V4:       v4,
 			V6:       v6,
@@ -767,7 +766,7 @@ func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER,
 		}
 		ULPDR.PDI.UEIPAddress = &ueIpAddr
 		ULPDR.PDI.NetworkInstance = nasType.Dnn(smContext.Dnn)
-		ULPDR.OuterHeaderRemoval = UplinkOuterHeaderRemoval(n3Family)
+		ULPDR.OuterHeaderRemoval = UplinkOuterHeaderRemoval(n3)
 
 		ULFAR := ULPDR.FAR
 		ULFAR.ApplyAction = ApplyAction{
@@ -873,7 +872,7 @@ func (dpNode *DataPathNode) ActivateDlLinkPdr(smContext *SMContext, defQER *QER,
 				DLFAR.ForwardingParameters.DestinationInterface.InterfaceValue = DestinationInterfaceAccess
 				DLFAR.ForwardingParameters.NetworkInstance = []byte(smContext.Dnn)
 				DLFAR.ForwardingParameters.OuterHeaderCreation = AccessOuterHeaderCreation(
-					anIP, smContext.Tunnel.ANInformation.TEID, ANUPF.UPF.GetTransportFamily())
+					anIP, smContext.Tunnel.ANInformation.TEID, ANUPF.UPF.GetN3Transport().Family)
 			}
 		}
 		logger.CtxLog.Infof("activate Downlink PDR[%v]:[%v]", name, DLPDR)

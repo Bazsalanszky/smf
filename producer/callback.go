@@ -510,11 +510,11 @@ func programAddedRule(smContext *smfContext.SMContext, pfcpParam *pfcpParam, nod
 		}
 		ulPDR.PDI.NetworkInstance = nasType.Dnn(smContext.Dnn)
 		ulPDR.PDI.UEIPAddress = sessionUEAddress(smContext, pfcpParam, false)
-		n3Family := smfContext.AddressFamilyAuto
+		var n3 smfContext.N3Transport
 		if node.UPF != nil {
-			n3Family = node.UPF.GetTransportFamily()
+			n3 = node.UPF.GetN3Transport()
 		}
-		ulPDR.OuterHeaderRemoval = smfContext.UplinkOuterHeaderRemoval(n3Family)
+		ulPDR.OuterHeaderRemoval = smfContext.UplinkOuterHeaderRemoval(n3)
 
 		// Configure FAR for UL traffic
 		if ulFAR := ulPDR.FAR; ulFAR != nil {
@@ -686,8 +686,7 @@ func undoRequalified(pfcpParam *pfcpParam) {
 // replaces the one the UPF holds (TS 29.244 table 7.5.4.2-1), and the reference UPF allocates no
 // F-TEID for an update: it parses the PDR afresh and keeps no TEID, so the rule matched any TEID.
 // The F-TEID is named as restoration pins it, from the tunnel's TEID and the N3 address the RAN
-// was given. An address that is not IPv4 is not known here: the F-TEID is built as IPv4, as the
-// SMF builds its sessions, and an IPv6 address would go on the wire as 0.0.0.0.
+// was given, in its families (V4, V6, or both for a dual F-TEID).
 func installedUplinkFTEID(node *smfContext.DataPathNode) *smfContext.FTEID {
 	if node.UpLinkTunnel == nil || node.UpLinkTunnel.TEID == 0 || node.UPF == nil {
 		return nil
