@@ -510,9 +510,11 @@ func programAddedRule(smContext *smfContext.SMContext, pfcpParam *pfcpParam, nod
 		}
 		ulPDR.PDI.NetworkInstance = nasType.Dnn(smContext.Dnn)
 		ulPDR.PDI.UEIPAddress = sessionUEAddress(smContext, pfcpParam, false)
-		ulPDR.OuterHeaderRemoval = &smfContext.OuterHeaderRemoval{
-			OuterHeaderRemovalDescription: smfContext.OuterHeaderRemovalGtpUUdpIpv4,
+		n3Family := smfContext.AddressFamilyAuto
+		if node.UPF != nil {
+			n3Family = node.UPF.GetTransportFamily()
 		}
+		ulPDR.OuterHeaderRemoval = smfContext.UplinkOuterHeaderRemoval(n3Family)
 
 		// Configure FAR for UL traffic
 		if ulFAR := ulPDR.FAR; ulFAR != nil {
@@ -690,11 +692,7 @@ func installedUplinkFTEID(node *smfContext.DataPathNode) *smfContext.FTEID {
 	if node.UpLinkTunnel == nil || node.UpLinkTunnel.TEID == 0 || node.UPF == nil {
 		return nil
 	}
-	access := accessAddressOf(node.UPF).To4()
-	if access == nil {
-		return nil
-	}
-	return &smfContext.FTEID{V4: true, Teid: node.UpLinkTunnel.TEID, Ipv4Address: access}
+	return smfContext.AssignedFTEID(node.UpLinkTunnel.TEID, accessAddressOf(node.UPF))
 }
 
 // 3GPP Reference: TS 23.502 §4.3.3.4 – "PDU Session Modification" procedure

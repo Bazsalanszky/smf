@@ -595,9 +595,9 @@ func HandlePfcpSessionEstablishmentResponse(msg *udp.Message) {
 			failPendingEstablishment(smContext, upfKey)
 			return
 		}
-		n3Interface := smf_context.UPFInterfaceInfo{}
-		// TODO(ipv6-p2): keep the IPv6 address of a V6 or dual F-TEID the UPF assigned.
-		n3Interface.IPv4EndPointAddresses = append(n3Interface.IPv4EndPointAddresses, advertised.IPv4Address)
+		// Both addresses of a dual F-TEID are kept; the UPF's transport family picks the one
+		// the RAN is told (UPFInterfaceInfo.TransportIP).
+		n3Interface := smf_context.N3InterfaceFromFTEID(advertised.IPv4Address, advertised.IPv6Address)
 		upf.UpfLock.Lock()
 		upf.N3Interfaces = make([]smf_context.UPFInterfaceInfo, 0)
 		upf.N3Interfaces = append(upf.N3Interfaces, n3Interface)

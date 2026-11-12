@@ -311,11 +311,9 @@ func EstablishRANTunnelInfo(smContext *context.SMContext) {
 	}
 
 	activatingANUPFDLFAR.State = context.RULE_INITIAL
-	activatingANUPFDLFAR.ForwardingParameters.OuterHeaderCreation = new(context.OuterHeaderCreation)
-	anOuterHeaderCreation := activatingANUPFDLFAR.ForwardingParameters.OuterHeaderCreation
-	anOuterHeaderCreation.OuterHeaderCreationDescription = context.OuterHeaderCreationGtpUUdpIpv4
-	anOuterHeaderCreation.Teid = defaultANUPFDLFAR.ForwardingParameters.OuterHeaderCreation.Teid
-	anOuterHeaderCreation.Ipv4Address = defaultANUPFDLFAR.ForwardingParameters.OuterHeaderCreation.Ipv4Address
+	// A copy of the default path's, so the RAN keeps receiving in the family it does.
+	anOuterHeaderCreation := *defaultANUPFDLFAR.ForwardingParameters.OuterHeaderCreation
+	activatingANUPFDLFAR.ForwardingParameters.OuterHeaderCreation = &anOuterHeaderCreation
 }
 
 func UpdateRANAndIUPFUpLink(smContext *context.SMContext) {

@@ -125,8 +125,9 @@ func BuildPDUSessionResourceSetupRequestTransfer(ctx *SMContext) ([]byte, error)
 		return nil, fmt.Errorf("no N3Interfaces available in UPF node")
 	}
 	// The N3 address comes from the UPF's transport family, never from the PDU session type.
-	// TODO(ipv6-p2): a dual-stack UPF advertises both families and the gNB is sent a 160-bit
-	// TransportLayerAddress (TS 38.414 clause 5.1); this sends one address of one family.
+	// An IPv6 one (128 bits) when upfTransportFamily makes N3 IPv6. TODO(ipv6-p2): the SMF
+	// asks for an F-TEID of one family (UplinkFTEIDFamilies), so the 160-bit dual-stack
+	// TransportLayerAddress (TS 38.414 clause 5.1) is never sent.
 	n3IP, err := UpNode.N3Interfaces[0].TransportIP(UpNode.TransportFamily)
 	UpNode.UpfLock.RUnlock()
 	if err != nil {
