@@ -628,3 +628,88 @@ func TestTheAssociationSetupRequestAsksToRetainNoSessionWithoutTheDatastore(t *t
 		t.Errorf("the request carries PFCP Session Retention Information, which asks the UP function to keep sessions nothing will find again")
 	}
 }
+
+// An IPv6 N3 session on the wire: the uplink F-TEID asks for an IPv6 address, the uplink PDR
+// removes a GTP-U/UDP/IPv6 header, and the downlink FAR creates one towards the gNB.
+func TestAnIPv6N3SessionOnTheWire(t *testing.T) {
+	gnb := net.ParseIP("2001:db8:630::232")
+	ul := &context.PDR{PDRID: 1, FAR: &context.FAR{FARID: 1}}
+	dlFAR := &context.FAR{FARID: 2, ApplyAction: context.ApplyAction{Forw: true}}
+	dlFAR.ForwardingParameters = &context.ForwardingParameters{
+		DestinationInterface: context.DestinationInterface{InterfaceValue: context.DestinationInterfaceAccess},
+		OuterHeaderCreation:  context.AccessOuterHeaderCreation(gnb, 0x99, context.AddressFamilyIPv6),
+	}
+	dpNode := &context.DataPathNode{
+		UPF: &context.UPF{TransportFamily: context.AddressFamilyIPv6},
+		UpLinkTunnel: &context.GTPTunnel{
+			PDR: map[string]*context.PDR{"default": ul},
+		},
+	}
+	smContext := &context.SMContext{PDUAddress: &context.UeIpAddr{Ip: net.IPv4(192, 168, 1, 1)}, Dnn: testDnnName}
+	if err := dpNode.ActivateUpLinkPdr(smContext, &context.QER{QERID: 1}, 10); err != nil {
+		t.Fatalf("ActivateUpLinkPdr: %v", err)
+	}
+
+	msg, err := message.BuildPfcpSessionEstablishmentRequest(44, cpNodeID, net.ParseIP(cpNodeID), 1,
+		[]*context.PDR{ul}, []*context.FAR{ul.FAR, dlFAR}, nil)
+	if err != nil {
+		t.Fatalf("building the establishment request: %v", err)
+	}
+	buf := make([]byte, msg.MarshalLen())
+	if err = msg.MarshalTo(buf); err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	req, err := pfcp_message.ParseSessionEstablishmentRequest(buf)
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+
+	pdi, err := req.CreatePDR[0].PDI()
+	if err != nil {
+		t.Fatalf("PDI: %v", err)
+	}
+	for _, x := range pdi {
+		if x.Type != ie.FTEID {
+			continue
+		}
+		fteid, ferr := x.FTEID()
+		if ferr != nil {
+			t.Fatalf("F-TEID: %v", ferr)
+		}
+		if fteid.HasIPv4() || !fteid.HasIPv6() || !fteid.HasCh() {
+			t.Errorf("F-TEID flags %#x: want CH and V6 only", fteid.Flags)
+		}
+	}
+	ohr, err := req.CreatePDR[0].OuterHeaderRemovalDescription()
+	if err != nil || ohr != context.OuterHeaderRemovalGtpUUdpIpv6 {
+		t.Errorf("outer header removal %d (%v), want %d", ohr, err, context.OuterHeaderRemovalGtpUUdpIpv6)
+	}
+
+	var found bool
+	for _, far := range req.CreateFAR {
+		if id, err := far.FARID(); err != nil || id != 2 {
+			continue
+		}
+		fps, err := far.ForwardingParameters()
+		if err != nil {
+			t.Fatalf("forwarding parameters: %v", err)
+		}
+		for _, fp := range fps {
+			if fp.Type != ie.OuterHeaderCreation {
+				continue
+			}
+			ohc, err := fp.OuterHeaderCreation()
+			if err != nil {
+				t.Fatalf("outer header creation: %v", err)
+			}
+			found = true
+			if ohc.OuterHeaderCreationDescription != context.OuterHeaderCreationGtpUUdpIpv6 ||
+				!ohc.IPv6Address.Equal(gnb) || ohc.TEID != 0x99 || ohc.HasIPv4() {
+				t.Errorf("outer header creation %+v, want GTP-U/UDP/IPv6 to %v TEID 0x99", ohc, gnb)
+			}
+		}
+	}
+	if !found {
+		t.Error("no outer header creation on the downlink FAR")
+	}
+}

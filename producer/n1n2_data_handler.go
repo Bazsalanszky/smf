@@ -75,11 +75,9 @@ func buildAccessForwardingParameters(smContext *context.SMContext,
 
 	if forwardingParameters.OuterHeaderCreation == nil &&
 		smContext.Tunnel != nil && smContext.Tunnel.ANInformation.IPAddress != nil {
-		forwardingParameters.OuterHeaderCreation = &context.OuterHeaderCreation{
-			OuterHeaderCreationDescription: context.OuterHeaderCreationGtpUUdpIpv4,
-			Teid:                           smContext.Tunnel.ANInformation.TEID,
-			Ipv4Address:                    smContext.Tunnel.ANInformation.IPAddress.To4(),
-		}
+		forwardingParameters.OuterHeaderCreation = context.AccessOuterHeaderCreation(
+			smContext.Tunnel.ANInformation.IPAddress, smContext.Tunnel.ANInformation.TEID,
+			smContext.ANTransportFamily())
 	}
 
 	return forwardingParameters

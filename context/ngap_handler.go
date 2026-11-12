@@ -39,11 +39,8 @@ func HandlePDUSessionResourceSetupResponseTransfer(b []byte, ctx *SMContext) (er
 		if dataPath.Activated {
 			ANUPF := dataPath.FirstDPNode
 			for _, DLPDR := range ANUPF.DownLinkTunnel.PDR {
-				DLPDR.FAR.ForwardingParameters.OuterHeaderCreation = new(OuterHeaderCreation)
-				dlOuterHeaderCreation := DLPDR.FAR.ForwardingParameters.OuterHeaderCreation
-				dlOuterHeaderCreation.OuterHeaderCreationDescription = OuterHeaderCreationGtpUUdpIpv4
-				dlOuterHeaderCreation.Teid = teid
-				dlOuterHeaderCreation.Ipv4Address = ctx.Tunnel.ANInformation.IPAddress.To4()
+				DLPDR.FAR.ForwardingParameters.OuterHeaderCreation = AccessOuterHeaderCreation(
+					ctx.Tunnel.ANInformation.IPAddress, teid, anTransportFamily(ANUPF))
 			}
 		}
 	}
@@ -74,11 +71,8 @@ func HandlePathSwitchRequestTransfer(b []byte, ctx *SMContext) error {
 		if dataPath.Activated {
 			ANUPF := dataPath.FirstDPNode
 			for _, DLPDR := range ANUPF.DownLinkTunnel.PDR {
-				DLPDR.FAR.ForwardingParameters.OuterHeaderCreation = new(OuterHeaderCreation)
-				dlOuterHeaderCreation := DLPDR.FAR.ForwardingParameters.OuterHeaderCreation
-				dlOuterHeaderCreation.OuterHeaderCreationDescription = OuterHeaderCreationGtpUUdpIpv4
-				dlOuterHeaderCreation.Teid = teid
-				dlOuterHeaderCreation.Ipv4Address = gtpTunnel.TransportLayerAddress.Value.Bytes
+				DLPDR.FAR.ForwardingParameters.OuterHeaderCreation = AccessOuterHeaderCreation(
+					gtpTunnel.TransportLayerAddress.Value.Bytes, teid, anTransportFamily(ANUPF))
 				DLPDR.FAR.State = RULE_UPDATE
 				DLPDR.FAR.ForwardingParameters.PFCPSMReqFlags = new(PFCPSMReqFlags)
 				DLPDR.FAR.ForwardingParameters.PFCPSMReqFlags.Sndem = true
@@ -137,15 +131,20 @@ func HandleHandoverRequestAcknowledgeTransfer(b []byte, ctx *SMContext) (err err
 						NetworkInstance:      []byte(ctx.Dnn),
 					}
 				}
-				DLPDR.FAR.ForwardingParameters.OuterHeaderCreation = new(OuterHeaderCreation)
-				dlOuterHeaderCreation := DLPDR.FAR.ForwardingParameters.OuterHeaderCreation
-				dlOuterHeaderCreation.OuterHeaderCreationDescription = OuterHeaderCreationGtpUUdpIpv4
-				dlOuterHeaderCreation.Teid = teid
-				dlOuterHeaderCreation.Ipv4Address = GTPTunnel.TransportLayerAddress.Value.Bytes
+				DLPDR.FAR.ForwardingParameters.OuterHeaderCreation = AccessOuterHeaderCreation(
+					GTPTunnel.TransportLayerAddress.Value.Bytes, teid, anTransportFamily(ANUPF))
 				DLPDR.FAR.State = RULE_UPDATE
 			}
 		}
 	}
 
 	return nil
+}
+
+// anTransportFamily is the N3 transport family of the UPF a data path starts at.
+func anTransportFamily(node *DataPathNode) AddressFamily {
+	if node == nil || node.UPF == nil {
+		return AddressFamilyAuto
+	}
+	return node.UPF.GetTransportFamily()
 }

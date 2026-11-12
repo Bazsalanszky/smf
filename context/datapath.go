@@ -737,6 +737,7 @@ func ueIpAddressIE(smContext *SMContext, upf *UPF, downlink bool) UEIPAddress {
 // ActivateUpLinkPdr
 func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER, defPrecedence uint32) error {
 	ueIpAddr := ueIpAddressIE(smContext, dpNode.UPF, false)
+	n3Family := dpNode.UPF.GetTransportFamily()
 
 	curULTunnel := dpNode.UpLinkTunnel
 	for name, ULPDR := range curULTunnel.PDR {
@@ -752,21 +753,21 @@ func (dpNode *DataPathNode) ActivateUpLinkPdr(smContext *SMContext, defQER *QER,
 		// One CHOOSE ID across the tunnel's PDRs, so the UPF gives them one F-TEID (TS 29.244
 		// clause 5.5.3). The RAN is told a single uplink TEID for the PDU session, and a PDR on a
 		// TEID of its own matches no packet: without this, which rule's TEID the RAN was told
-		// followed map order, and uplink the told rule did not match was dropped. V4 because
-		// clause 8.2.3 requires V4 or V6 even with CHOOSE, and the SMF builds IPv4-only sessions:
-		// the PDN type is IPv4 and the F-TEID the UPF assigns is read back as IPv4.
-		// TODO(ipv6-p2): set V4 and/or V6 from the UPF's transport family (dual F-TEID).
+		// followed map order, and uplink the told rule did not match was dropped. The family
+		// is the UPF's N3 transport family, never the PDU session type (UplinkFTEIDFamilies).
+		// TODO(ipv6-p2): a dual F-TEID (V4 and V6) needs the 160-bit TransportLayerAddress
+		// towards the RAN, see BuildPDUSessionResourceSetupRequestTransfer.
+		v4, v6 := UplinkFTEIDFamilies(n3Family)
 		ULPDR.PDI.LocalFTeid = &FTEID{
-			V4:       true,
+			V4:       v4,
+			V6:       v6,
 			Ch:       true,
 			Chid:     true,
 			ChooseId: uplinkTunnelChooseId,
 		}
 		ULPDR.PDI.UEIPAddress = &ueIpAddr
 		ULPDR.PDI.NetworkInstance = nasType.Dnn(smContext.Dnn)
-		ULPDR.OuterHeaderRemoval = &OuterHeaderRemoval{
-			OuterHeaderRemovalDescription: OuterHeaderRemovalGtpUUdpIpv4,
-		}
+		ULPDR.OuterHeaderRemoval = UplinkOuterHeaderRemoval(n3Family)
 
 		ULFAR := ULPDR.FAR
 		ULFAR.ApplyAction = ApplyAction{
@@ -871,12 +872,8 @@ func (dpNode *DataPathNode) ActivateDlLinkPdr(smContext *SMContext, defQER *QER,
 				DLFAR.ForwardingParameters = new(ForwardingParameters)
 				DLFAR.ForwardingParameters.DestinationInterface.InterfaceValue = DestinationInterfaceAccess
 				DLFAR.ForwardingParameters.NetworkInstance = []byte(smContext.Dnn)
-				DLFAR.ForwardingParameters.OuterHeaderCreation = new(OuterHeaderCreation)
-
-				dlOuterHeaderCreation := DLFAR.ForwardingParameters.OuterHeaderCreation
-				dlOuterHeaderCreation.OuterHeaderCreationDescription = OuterHeaderCreationGtpUUdpIpv4
-				dlOuterHeaderCreation.Teid = smContext.Tunnel.ANInformation.TEID
-				dlOuterHeaderCreation.Ipv4Address = smContext.Tunnel.ANInformation.IPAddress.To4()
+				DLFAR.ForwardingParameters.OuterHeaderCreation = AccessOuterHeaderCreation(
+					anIP, smContext.Tunnel.ANInformation.TEID, ANUPF.UPF.GetTransportFamily())
 			}
 		}
 		logger.CtxLog.Infof("activate Downlink PDR[%v]:[%v]", name, DLPDR)

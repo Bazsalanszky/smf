@@ -342,9 +342,8 @@ func HandlePfcpSessionEstablishmentResponse(msg *udp.Message) error {
 			return fmt.Errorf("can't find UPF[%s]", nodeID.ResolveNodeIdToIp().String())
 		}
 		upf.N3Interfaces = make([]context.UPFInterfaceInfo, 0)
-		n3Interface := context.UPFInterfaceInfo{}
-		// TODO(ipv6-p2): keep the IPv6 address of a V6 or dual F-TEID the UPF assigned.
-		n3Interface.IPv4EndPointAddresses = append(n3Interface.IPv4EndPointAddresses, advertised.IPv4Address)
+		// Both addresses of a dual F-TEID are kept, as in the handler.
+		n3Interface := context.N3InterfaceFromFTEID(advertised.IPv4Address, advertised.IPv6Address)
 		upf.N3Interfaces = append(upf.N3Interfaces, n3Interface)
 	}
 

@@ -690,10 +690,9 @@ func pinUplinkTunnelsToTheirExistingTeids(smContext *context.SMContext, nodeIP s
 				// Never established, so there is no tunnel to preserve. Not a fault.
 				continue
 			}
-			// TODO(ipv6-p2): the pinned F-TEID is IPv4 only (V4/Ipv4Address); an IPv6 N3 address
-			// is treated as none rather than sent as 0.0.0.0.
-			access := accessAddressOf(node.UPF).To4()
-			if access == nil {
+			// The F-TEID is named in the family of the N3 address the RAN was given (V4 or V6).
+			access := accessAddressOf(node.UPF)
+			if context.AssignedFTEID(node.UpLinkTunnel.TEID, access) == nil {
 				// Said out loud, because the alternative is a repair that quietly does nothing. An
 				// F-TEID carrying the V4 flag and no address is malformed and the UPF rejects the
 				// whole establishment, so the pin is skipped instead -- and a silent skip is
@@ -714,22 +713,14 @@ func pinUplinkTunnelsToTheirExistingTeids(smContext *context.SMContext, nodeIP s
 				if pdr == nil || pdr.PDI.LocalFTeid == nil {
 					continue
 				}
-				pdr.PDI.LocalFTeid = &context.FTEID{
-					V4:          true,
-					Teid:        node.UpLinkTunnel.TEID,
-					Ipv4Address: access,
-				}
+				pdr.PDI.LocalFTeid = context.AssignedFTEID(node.UpLinkTunnel.TEID, access)
 				nodePinned++
 			}
 			// The UP2CP PDR shares the uplink F-TEID (its CHOOSE ID). Left choosing, it would get
 			// a TEID of its own, and router solicitations would keep arriving on the pinned one,
 			// where the default uplink PDR takes them to the data network.
 			if ra := node.RouterAdvertisement; ra != nil && ra.Solicitation != nil && ra.Solicitation.PDI.LocalFTeid != nil {
-				ra.Solicitation.PDI.LocalFTeid = &context.FTEID{
-					V4:          true,
-					Teid:        node.UpLinkTunnel.TEID,
-					Ipv4Address: access,
-				}
+				ra.Solicitation.PDI.LocalFTeid = context.AssignedFTEID(node.UpLinkTunnel.TEID, access)
 				nodePinned++
 			}
 			pinned += nodePinned

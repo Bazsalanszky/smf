@@ -2266,11 +2266,31 @@ func TestAnUplinkUpdateNamesTheInstalledFTEID(t *testing.T) {
 		}
 	})
 
-	// With no N3 address, or only one the IPv4 F-TEID cannot carry: an IPv6 address goes on the wire
-	// as 0.0.0.0. An IPv4v6 session reads the IPv6 one when the UPF has no IPv4 address.
+	// An IPv6 N3 address (upfTransportFamily ipv6, or a UPF with no IPv4 one) is named in an IPv6
+	// F-TEID: the one the UPF assigned and the RAN was told.
+	t.Run("an IPv6 N3 address is named in an IPv6 F-TEID", func(t *testing.T) {
+		s := established(t, nil)
+		n3 := net.ParseIP("2001:db8::1")
+		s.sm.Tunnel.DataPathPool[1].FirstDPNode.UPF.N3Interfaces = []smf_context.UPFInterfaceInfo{
+			{IPv6EndPointAddresses: []net.IP{n3}},
+		}
+		s.sm.SmPolicyUpdates = []*qos.PolicyUpdate{qos.BuildSmPolicyUpdate(&s.sm.SmPolicyData, s.rateChange())}
+		param := BuildPfcpParam(s.sm)
+		if len(param.unbuilt) != 0 {
+			t.Fatalf("not built: %v", param.unbuilt)
+		}
+		if !param.touches(s.cirUL) {
+			t.Fatal("the uplink PDR is not updated")
+		}
+		f := s.cirUL.PDI.LocalFTeid
+		if f == nil || f.V4 || !f.V6 || f.Ch || !f.Ipv6Address.Equal(n3) || f.Teid != teid {
+			t.Errorf("F-TEID %+v, want V6 %v TEID %#x without CHOOSE", f, n3, teid)
+		}
+	})
+
+	// With no N3 address there is no F-TEID to name.
 	for name, n3 := range map[string][]smf_context.UPFInterfaceInfo{
-		"no N3 address":      nil,
-		"an IPv6 N3 address": {{IPv6EndPointAddresses: []net.IP{net.ParseIP("2001:db8::1")}}},
+		"no N3 address": nil,
 	} {
 		t.Run("an unknown F-TEID leaves the uplink PDR alone: "+name, func(t *testing.T) {
 			s := established(t, nil)
