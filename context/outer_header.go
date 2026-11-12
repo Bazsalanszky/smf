@@ -45,9 +45,10 @@ func SplitTransportLayerAddress(b []byte) (v4, v6 net.IP) {
 
 // AccessOuterHeaderCreation is the outer header creation towards the RAN at anAddress (as the
 // RAN sent it, see SplitTransportLayerAddress) with teid, from a UPF of the given transport
-// family. An address of one family is sent to as it is; of a dual-stack RAN, the IPv6 address
-// is taken when the UPF's N3 is IPv6 (upfTransportFamily) and the IPv4 one otherwise, which is
-// what the SMF did before it had IPv6 N3. An address of neither family keeps the old IPv4
+// family. An address of one family is sent to as it is: with a dual F-TEID the RAN picks the
+// family, and its downlink address says which. Of a dual-stack RAN, the IPv6 address is taken
+// when the UPF's N3 is IPv6 and the IPv4 one otherwise (a dual N3 included), which is what the
+// SMF did before it had IPv6 N3. An address of neither family keeps the old IPv4
 // description, so the UPF refuses the rule rather than the SMF dropping it here.
 func AccessOuterHeaderCreation(anAddress net.IP, teid uint32, family AddressFamily) *OuterHeaderCreation {
 	ohc := &OuterHeaderCreation{Teid: teid}
@@ -62,35 +63,48 @@ func AccessOuterHeaderCreation(anAddress net.IP, teid uint32, family AddressFami
 	return ohc
 }
 
-// UplinkFTEIDFamilies gives the families of the F-TEID the SMF asks a UPF to choose on N3: IPv6
-// for a UPF whose transport family is IPv6, IPv4 otherwise (TS 29.244 clause 8.2.3 wants V4 or
-// V6 even with CHOOSE).
-func UplinkFTEIDFamilies(family AddressFamily) (v4, v6 bool) {
-	if family == AddressFamilyIPv6 {
+// UplinkFTEIDFamilies gives the families of the F-TEID the SMF asks a UPF to choose on N3: both
+// for a dual N3, IPv6 for an IPv6 N3, IPv4 otherwise (TS 29.244 clause 8.2.3 wants V4 and/or V6
+// even with CHOOSE).
+func UplinkFTEIDFamilies(n3 N3Transport) (v4, v6 bool) {
+	switch {
+	case n3.Dual:
+		return true, true
+	case n3.Family == AddressFamilyIPv6:
 		return false, true
 	}
 	return true, false
 }
 
-// UplinkOuterHeaderRemoval is the outer header removal of an N3 uplink PDR: GTP-U/UDP/IPv6 when
-// the UPF's F-TEID is IPv6, GTP-U/UDP/IPv4 otherwise.
-func UplinkOuterHeaderRemoval(family AddressFamily) *OuterHeaderRemoval {
-	if family == AddressFamilyIPv6 {
+// UplinkOuterHeaderRemoval is the outer header removal of an N3 uplink PDR: GTP-U/UDP/IP on a
+// dual F-TEID, where uplink may arrive in either family; GTP-U/UDP/IPv6 on an IPv6 one;
+// GTP-U/UDP/IPv4 otherwise.
+func UplinkOuterHeaderRemoval(n3 N3Transport) *OuterHeaderRemoval {
+	switch {
+	case n3.Dual:
+		return &OuterHeaderRemoval{OuterHeaderRemovalDescription: OuterHeaderRemovalGtpUUdpIp}
+	case n3.Family == AddressFamilyIPv6:
 		return &OuterHeaderRemoval{OuterHeaderRemovalDescription: OuterHeaderRemovalGtpUUdpIpv6}
 	}
 	return &OuterHeaderRemoval{OuterHeaderRemovalDescription: OuterHeaderRemovalGtpUUdpIpv4}
 }
 
-// AssignedFTEID names the F-TEID a UPF assigned, teid at address: V4 or V6 by the address's
-// family. It is nil without an address.
+// AssignedFTEID names the F-TEID a UPF assigned, teid at address, where address is the N3
+// TransportLayerAddress the RAN was told (see SplitTransportLayerAddress): V4, V6, or both for a
+// dual F-TEID. It is nil without an address.
 func AssignedFTEID(teid uint32, address net.IP) *FTEID {
-	if v4 := address.To4(); v4 != nil {
-		return &FTEID{V4: true, Teid: teid, Ipv4Address: v4}
+	v4, v6 := SplitTransportLayerAddress(address)
+	if v4 == nil && v6 == nil {
+		return nil
 	}
-	if len(address) == net.IPv6len {
-		return &FTEID{V6: true, Teid: teid, Ipv6Address: address}
+	fteid := &FTEID{Teid: teid}
+	if v4 != nil {
+		fteid.V4, fteid.Ipv4Address = true, v4.To4()
 	}
-	return nil
+	if v6 != nil {
+		fteid.V6, fteid.Ipv6Address = true, v6
+	}
+	return fteid
 }
 
 // N3InterfaceFromFTEID is the N3 interface of a UPF as the F-TEID it assigned gives it: the
@@ -115,7 +129,7 @@ func (smContext *SMContext) ANTransportFamily() AddressFamily {
 	}
 	if path := smContext.Tunnel.DataPathPool.GetDefaultPath(); path != nil &&
 		path.FirstDPNode != nil && path.FirstDPNode.UPF != nil {
-		return path.FirstDPNode.UPF.GetTransportFamily()
+		return path.FirstDPNode.UPF.GetN3Transport().Family
 	}
 	return AddressFamilyAuto
 }

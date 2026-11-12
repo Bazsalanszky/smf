@@ -119,17 +119,10 @@ func BuildPDUSessionResourceSetupRequestTransfer(ctx *SMContext) ([]byte, error)
 	ie = ngapType.PDUSessionResourceSetupRequestTransferIEs{}
 	ie.Id.Value = ngapType.ProtocolIEIDULNGUUPTNLInformation
 	ie.Criticality.Value = ngapType.CriticalityPresentReject
-	UpNode.UpfLock.RLock()
-	if len(UpNode.N3Interfaces) == 0 {
-		UpNode.UpfLock.RUnlock()
-		return nil, fmt.Errorf("no N3Interfaces available in UPF node")
-	}
-	// The N3 address comes from the UPF's transport family, never from the PDU session type.
-	// An IPv6 one (128 bits) when upfTransportFamily makes N3 IPv6. TODO(ipv6-p2): the SMF
-	// asks for an F-TEID of one family (UplinkFTEIDFamilies), so the 160-bit dual-stack
-	// TransportLayerAddress (TS 38.414 clause 5.1) is never sent.
-	n3IP, err := UpNode.N3Interfaces[0].TransportIP(UpNode.TransportFamily)
-	UpNode.UpfLock.RUnlock()
+	// The N3 address comes from the UPF's N3 transport, never from the PDU session type: 32 bits
+	// for IPv4, 128 for IPv6, and 160 (IPv4 then IPv6, TS 38.414 clause 5.1) for a dual F-TEID,
+	// so the RAN picks the family (N3TransportLayerAddressLocked).
+	n3IP, err := UpNode.N3TransportLayerAddress()
 	if err != nil {
 		return nil, err
 	}
@@ -802,13 +795,7 @@ func BuildPathSwitchRequestAcknowledgeTransfer(ctx *SMContext) ([]byte, error) {
 	ULNGUUPTNLInformation.Present = ngapType.UPTransportLayerInformationPresentGTPTunnel
 	ULNGUUPTNLInformation.GTPTunnel = new(ngapType.GTPTunnel)
 
-	UpNode.UpfLock.RLock()
-	if len(UpNode.N3Interfaces) == 0 {
-		UpNode.UpfLock.RUnlock()
-		return nil, fmt.Errorf("no N3Interfaces available in UPF node")
-	}
-	n3IP, err := UpNode.N3Interfaces[0].TransportIP(UpNode.TransportFamily)
-	UpNode.UpfLock.RUnlock()
+	n3IP, err := UpNode.N3TransportLayerAddress()
 	if err != nil {
 		return nil, err
 	}
@@ -853,13 +840,7 @@ func BuildHandoverCommandTransfer(ctx *SMContext) ([]byte, error) {
 	handoverCommandTransfer.DLForwardingUPTNLInformation.Present = ngapType.UPTransportLayerInformationPresentGTPTunnel
 	handoverCommandTransfer.DLForwardingUPTNLInformation.GTPTunnel = new(ngapType.GTPTunnel)
 
-	UpNode.UpfLock.RLock()
-	if len(UpNode.N3Interfaces) == 0 {
-		UpNode.UpfLock.RUnlock()
-		return nil, fmt.Errorf("no N3Interfaces available in UPF node")
-	}
-	n3IP, err := UpNode.N3Interfaces[0].TransportIP(UpNode.TransportFamily)
-	UpNode.UpfLock.RUnlock()
+	n3IP, err := UpNode.N3TransportLayerAddress()
 	if err != nil {
 		return nil, err
 	}

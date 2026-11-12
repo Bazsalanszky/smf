@@ -690,7 +690,7 @@ func pinUplinkTunnelsToTheirExistingTeids(smContext *context.SMContext, nodeIP s
 				// Never established, so there is no tunnel to preserve. Not a fault.
 				continue
 			}
-			// The F-TEID is named in the family of the N3 address the RAN was given (V4 or V6).
+			// The F-TEID is named in the families of the N3 address the RAN was given (V4, V6 or both).
 			access := accessAddressOf(node.UPF)
 			if context.AssignedFTEID(node.UpLinkTunnel.TEID, access) == nil {
 				// Said out loud, because the alternative is a repair that quietly does nothing. An
@@ -776,8 +776,8 @@ func n3InterfaceCount(upf *context.UPF) int {
 
 // accessAddressOf returns the N3 address the RAN was told to send to.
 //
-// It resolves it the same way the N2 setup did, through UPFInterfaceInfo.TransportIP on the first
-// N3 interface with the UPF's transport family. Reading IPv4EndPointAddresses directly is not
+// It resolves it the same way the N2 setup did, through UPF.N3TransportLayerAddress (the first N3
+// interface, in the UPF's N3 transport: 4, 16 or 20 bytes for a dual F-TEID). Reading IPv4EndPointAddresses directly is not
 // equivalent: an interface configured by FQDN carries no address there, and an earlier version of
 // this returned nil for exactly that reason, then built an F-TEID with the V4 flag and no address,
 // which the UPF rejected as missing a mandatory IE.
@@ -785,12 +785,7 @@ func n3InterfaceCount(upf *context.UPF) int {
 // Deriving it the same way as the N2 build is the point, not a convenience: the address pinned here
 // has to be the one the RAN is sending to, and that is the only way to be sure of it.
 func accessAddressOf(upf *context.UPF) net.IP {
-	upf.UpfLock.RLock()
-	defer upf.UpfLock.RUnlock()
-	if len(upf.N3Interfaces) == 0 {
-		return nil
-	}
-	address, err := upf.N3Interfaces[0].TransportIP(upf.TransportFamily)
+	address, err := upf.N3TransportLayerAddress()
 	if err != nil {
 		return nil
 	}

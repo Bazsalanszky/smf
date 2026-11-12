@@ -212,6 +212,7 @@ func HandlePfcpAssociationSetupRequest(msg *udp.Message) {
 	// carries no answer to it.
 	upf.SessionsRetained = false
 	upf.NHeartBeat = 0 // reset Heartbeat attempt to 0
+	setN3Advertisement(upf, req.UserPlaneIPResourceInformation)
 
 	// Response with PFCP Association Setup Response
 	err = pfcp_message.SendPfcpAssociationSetupResponse(*nodeID, ie.CauseRequestAccepted, upf.Port)
@@ -272,6 +273,7 @@ func HandlePfcpAssociationSetupResponse(msg *udp.Message) {
 		upf.UPFStatus = smf_context.AssociatedSetUpSuccess
 		upf.SessionsRetained = rsp.PFCPASRspFlags != nil && rsp.PFCPASRspFlags.HasPSREI()
 		logger.PfcpLog.Infof("upf status updated to %v for NodeID[%s]", upf.UPFStatus, nodeIDStr)
+		setN3Advertisement(upf, rsp.UserPlaneIPResourceInformation)
 
 		recoveryTimestamp, err := rsp.RecoveryTimeStamp.RecoveryTimeStamp()
 		if err != nil {
@@ -320,6 +322,23 @@ func HandlePfcpAssociationSetupResponse(msg *udp.Message) {
 			upf.UPFunctionFeatures = UPFunctionFeatures
 		}
 	}
+}
+
+// setN3Advertisement records the families of the UPF's N3 addresses from the UP IP Resource
+// Information of an association it set up; the caller holds upf.UpfLock.
+func setN3Advertisement(upf *smf_context.UPF, upIPResources []*ie.IE) {
+	adv := smf_context.N3Advertisement{}
+	if len(upIPResources) != 0 {
+		payloads := make([][]byte, 0, len(upIPResources))
+		for _, res := range upIPResources {
+			if res != nil {
+				payloads = append(payloads, res.Payload)
+			}
+		}
+		adv = smf_context.ParseN3Advertisement(payloads)
+	}
+	upf.SetN3Advertisement(adv)
+	logger.PfcpLog.Infof("UPF[%s] N3: advertised %+v, transport %+v", upf.NodeID.ResolveNodeIdToIp(), adv, upf.N3TransportLocked())
 }
 
 func HandlePfcpAssociationUpdateRequest(msg *udp.Message) {

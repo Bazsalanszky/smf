@@ -76,7 +76,11 @@ type Configuration struct {
 	T3591                    *TimerValue       `yaml:"t3591,omitempty"`
 	// UpfTransportFamily optionally restricts the N3/N9 (GTP-U) transport of a UPF to
 	// one family, "ipv4" or "ipv6", keyed by the UPF hostname the session management
-	// configuration names it by. A UPF not listed uses the addresses it has, IPv4 first.
+	// configuration names it by. A UPF not listed follows the UP IP Resource Information it
+	// sends at association: with both families the SMF asks it for a dual F-TEID and gives
+	// the RAN both addresses (a 160-bit TransportLayerAddress) to pick from; with IPv6 alone,
+	// IPv6; otherwise (IPv4 alone, or nothing advertised) IPv4 first, as before. "ipv4"
+	// keeps a dual-stack UPF on IPv4 N3, for a RAN that does not take a 160-bit address.
 	// The family is never derived from the UE's PDU session type.
 	UpfTransportFamily map[string]string `yaml:"upfTransportFamily,omitempty"`
 	// CPGtpu optionally runs the SMF's own GTP-U endpoint, which answers the router

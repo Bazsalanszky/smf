@@ -144,6 +144,17 @@ func HandlePfcpAssociationSetupResponse(msg *udp.Message) {
 
 		upf.UPFStatus = context.AssociatedSetUpSuccess
 		upf.SessionsRetained = rsp.PFCPASRspFlags != nil && rsp.PFCPASRspFlags.HasPSREI()
+		// The adapter relays the UPF's own response (its stored copy), with the UPF's UP IP
+		// Resource Information.
+		payloads := make([][]byte, 0, len(rsp.UserPlaneIPResourceInformation))
+		for _, res := range rsp.UserPlaneIPResourceInformation {
+			if res != nil {
+				payloads = append(payloads, res.Payload)
+			}
+		}
+		upf.UpfLock.Lock()
+		upf.SetN3Advertisement(context.ParseN3Advertisement(payloads))
+		upf.UpfLock.Unlock()
 		logger.PfcpLog.Debugln("upf status updated to associated: %+v", upf.UPFStatus)
 		if rsp.RecoveryTimeStamp == nil {
 			logger.PfcpLog.Errorln("pfcp association setup response has no RecoveryTimeStamp")
