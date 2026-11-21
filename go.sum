@@ -1,3 +1,7 @@
+github.com/Bazsalanszky/openapi/v2 v2.4.2-0.20261121092913-b823ffd01267 h1:Y5ImZWz/+IJ8Z0wE0PVIFNqbPXe17e2C9mL5QevdZ/s=
+github.com/Bazsalanszky/openapi/v2 v2.4.2-0.20261121092913-b823ffd01267/go.mod h1:rxga/kSw3sIbG+m7jhdYwPJ/Pz00GnxkXBasGuopfLs=
+github.com/Bazsalanszky/util v1.9.4-0.20261121092912-e2d91d59141d h1:VJcaMpxpVCKECSnOqpLGh+pWIzK7/7Hr/SxMjzfcRZ8=
+github.com/Bazsalanszky/util v1.9.4-0.20261121092912-e2d91d59141d/go.mod h1:1LtB8Uo9zNy9gaybMdLT67UO9KdGIZIVEmcj0I23TP8=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bytedance/gopkg v0.1.4 h1:oZnQwnX82KAIWb7033bEwtxvTqXcYMxDBaQxo5JJHWM=
@@ -61,10 +65,6 @@ github.com/omec-project/nas/v2 v2.2.8 h1:OI2SfKz1D7zQLGxxoiXDucv0taQwty5Mftgf9Rr
 github.com/omec-project/nas/v2 v2.2.8/go.mod h1:JEMxhZGwgjOjJSzz0/f2d6EkIDcHjsEiXvQ1T1Z9Z9E=
 github.com/omec-project/ngap/v2 v2.1.11 h1:F07k4UHSNDDLl3p0OjxcKvo+1sPByCpETBwoPVMuuAg=
 github.com/omec-project/ngap/v2 v2.1.11/go.mod h1:PKvE3nW/LtqIUtZKVZT1NhUUs7ncQ7sB2BniHKcordA=
-github.com/omec-project/openapi/v2 v2.5.1 h1:oNMN5ARgNLnVSKbMgGKYekPHUN0QXKATy6zdxfNe1K8=
-github.com/omec-project/openapi/v2 v2.5.1/go.mod h1:rxga/kSw3sIbG+m7jhdYwPJ/Pz00GnxkXBasGuopfLs=
-github.com/omec-project/util v1.10.2 h1:wfcgiirq0GsjtC+/7aam98kneMH2TOmkCzvpd6U+s4I=
-github.com/omec-project/util v1.10.2/go.mod h1:1LtB8Uo9zNy9gaybMdLT67UO9KdGIZIVEmcj0I23TP8=
 github.com/pandatix/go-abnf v0.5.5 h1:EXex5KkRQx4Dm6GnpAcQnIMBs9KiK0uf8p/wq+4t9PM=
 github.com/pandatix/go-abnf v0.5.5/go.mod h1:AE0KD3/VNoCjGzc1gqetRKshbI4SYErXQ/8kPenR5mc=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
