@@ -1,3 +1,5 @@
+github.com/Bazsalanszky/nas/v2 v2.2.8-0.20261121092912-527b1bbfdef9 h1:QICHig3TE8tJpd1ieMGgmWGN4cw+abS0qa4eFY7DlqQ=
+github.com/Bazsalanszky/nas/v2 v2.2.8-0.20261121092912-527b1bbfdef9/go.mod h1:JEMxhZGwgjOjJSzz0/f2d6EkIDcHjsEiXvQ1T1Z9Z9E=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bytedance/gopkg v0.1.4 h1:oZnQwnX82KAIWb7033bEwtxvTqXcYMxDBaQxo5JJHWM=
@@ -57,8 +59,6 @@ github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9G
 github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/omec-project/nas/v2 v2.2.8 h1:OI2SfKz1D7zQLGxxoiXDucv0taQwty5Mftgf9RrinZ8=
-github.com/omec-project/nas/v2 v2.2.8/go.mod h1:JEMxhZGwgjOjJSzz0/f2d6EkIDcHjsEiXvQ1T1Z9Z9E=
 github.com/omec-project/ngap/v2 v2.1.11 h1:F07k4UHSNDDLl3p0OjxcKvo+1sPByCpETBwoPVMuuAg=
 github.com/omec-project/ngap/v2 v2.1.11/go.mod h1:PKvE3nW/LtqIUtZKVZT1NhUUs7ncQ7sB2BniHKcordA=
 github.com/omec-project/openapi/v2 v2.5.1 h1:oNMN5ARgNLnVSKbMgGKYekPHUN0QXKATy6zdxfNe1K8=
